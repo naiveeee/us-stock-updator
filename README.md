@@ -52,7 +52,7 @@ npm run build
 npm run start  # 或 node .output/server/index.mjs
 ```
 
-访问 http://localhost:3000 打开 Web 面板。
+访问 http://localhost:3456 打开 Web 面板。
 
 ### 5. 通过 API 采集
 
@@ -60,16 +60,16 @@ npm run start  # 或 node .output/server/index.mjs
 
 ```bash
 # 启动采集
-curl -X POST http://localhost:3000/api/fetch/start
+curl -X POST http://localhost:3456/api/fetch/start
 
 # 查看状态
-curl http://localhost:3000/api/fetch/status
+curl http://localhost:3456/api/fetch/status
 
 # 停止采集
-curl -X POST http://localhost:3000/api/fetch/stop
+curl -X POST http://localhost:3456/api/fetch/stop
 
 # 重试失败
-curl -X POST http://localhost:3000/api/fetch/start -d '{"retryErrors":true}'
+curl -X POST http://localhost:3456/api/fetch/start -d '{"retryErrors":true}'
 ```
 
 ## 查询 API
@@ -105,7 +105,7 @@ GET /api/stocks/tickers?search=TSL&limit=100
 npm run build
 
 # 启动（端口可通过 PORT 环境变量指定）
-PORT=3000 MASSIVE_API_KEY=your_key node .output/server/index.mjs
+PORT=3456 MASSIVE_API_KEY=your_key node .output/server/index.mjs
 
 # 或用 PM2
 pm2 start .output/server/index.mjs --name us-stock-updator

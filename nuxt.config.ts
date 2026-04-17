@@ -3,6 +3,11 @@ export default defineNuxtConfig({
   compatibilityDate: "2024-11-01",
   devtools: { enabled: false },
 
+  // 默认端口
+  devServer: {
+    port: 3456,
+  },
+
   // 运行时配置，可通过环境变量覆盖
   runtimeConfig: {
     // 服务端私有配置
