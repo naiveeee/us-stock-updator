@@ -1,0 +1,25 @@
+{
+  "name": "us-stock-updator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "US Stock Daily OHLCV Data Collector & API Server (Massive API + SQLite)",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "preview": "nuxt preview",
+    "start": "node .output/server/index.mjs",
+    "fetch": "node scripts/fetch.mjs",
+    "fetch:status": "node scripts/status.mjs",
+    "fetch:retry": "node scripts/fetch.mjs --retry-errors"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "nuxt": "^3.16.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
