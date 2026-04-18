@@ -14,14 +14,14 @@ export default defineEventHandler((event) => {
   const query = getQuery(event);
   const db = getDb();
 
-  // 日期：如不传则取最新的交易日
+  // 日期：如不传则取最新的交易日（从 daily_bars 查，兼容 CRSP 导入数据）
   let date = query.date as string;
   if (!date) {
     const latest = db
       .prepare(
-        "SELECT MAX(date) as date FROM fetch_progress WHERE status = 'done'"
+        "SELECT date FROM daily_bars ORDER BY date DESC LIMIT 1"
       )
-      .get() as { date: string | null } | undefined;
+      .get() as { date: string } | undefined;
     date = latest?.date || new Date().toISOString().slice(0, 10);
   }
 

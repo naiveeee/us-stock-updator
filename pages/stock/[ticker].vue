@@ -84,8 +84,10 @@ let mainChart: IChartApi | null = null;
 let macdChart: IChartApi | null = null;
 let rsiChart: IChartApi | null = null;
 
-// key 用 ticker 保证客户端导航时重新请求
+// key 随 ticker+range 变化，保证客户端导航时重新请求（避免 SSR 缓存）
+const fetchKey = computed(() => `weekly-${ticker.value}-${selectedRange.value}`);
 const { data, pending, error } = useFetch<any>("/api/stocks/weekly", {
+  key: fetchKey.value,
   query: computed(() => ({
     ticker: ticker.value,
     weeks: selectedRange.value,
