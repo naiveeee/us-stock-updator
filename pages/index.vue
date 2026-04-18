@@ -37,8 +37,11 @@
     <section class="card">
       <h2>⚙️ 选股流水线</h2>
       <div class="actions">
-        <button @click="runPipeline(false)" :disabled="pipelineState?.running" class="btn btn-success">
-          ▶️ 运行流水线
+        <button @click="runDailyUpdate" :disabled="pipelineState?.running" class="btn btn-success">
+          📅 每日更新 (采集+扫描)
+        </button>
+        <button @click="runPipeline(false)" :disabled="pipelineState?.running" class="btn">
+          ▶️ 增量流水线
         </button>
         <button @click="runPipeline(true)" :disabled="pipelineState?.running" class="btn btn-warning">
           🔄 全量重建
@@ -217,6 +220,20 @@ async function runScanOnly() {
     message.value = res.message;
     messageType.value = res.status === "done" ? "success" : "info";
     pipelineState.value = res.state;
+  } catch (e: any) {
+    message.value = e?.data?.message || e.message;
+    messageType.value = "error";
+  }
+}
+
+async function runDailyUpdate() {
+  try {
+    message.value = "正在采集今日数据并运行流水线...";
+    messageType.value = "info";
+    const res = await $fetch<any>("/api/pipeline/daily", { method: "POST" });
+    message.value = `每日更新完成: 采集 ${res.fetchCount} 只股票, 流水线 ${res.pipeline}`;
+    messageType.value = "success";
+    refreshStatus();
   } catch (e: any) {
     message.value = e?.data?.message || e.message;
     messageType.value = "error";
