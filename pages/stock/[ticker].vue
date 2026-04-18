@@ -84,16 +84,14 @@ let mainChart: IChartApi | null = null;
 let macdChart: IChartApi | null = null;
 let rsiChart: IChartApi | null = null;
 
-// key 随 ticker+range 变化，保证客户端导航时重新请求（避免 SSR 缓存）
-const fetchKey = computed(() => `weekly-${ticker.value}-${selectedRange.value}`);
-const { data, pending, error } = useFetch<any>("/api/stocks/weekly", {
-  key: fetchKey.value,
-  query: computed(() => ({
-    ticker: ticker.value,
-    weeks: selectedRange.value,
-  })),
-  watch: [ticker, selectedRange],
-});
+// 用 useAsyncData + $fetch 完全控制请求，避免 useFetch SSR 缓存导致客户端导航不刷新
+const { data, pending, error, refresh } = useAsyncData(
+  () => `weekly-${ticker.value}-${selectedRange.value}`,
+  () => $fetch<any>("/api/stocks/weekly", {
+    params: { ticker: ticker.value, weeks: selectedRange.value },
+  }),
+  { watch: [ticker, selectedRange] },
+);
 
 const weekChange = computed(() => {
   if (!data.value?.bars?.length || data.value.bars.length < 2) return null;
