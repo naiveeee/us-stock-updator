@@ -66,7 +66,7 @@
 import { createChart, type IChartApi, ColorType, LineStyle } from "lightweight-charts";
 
 const route = useRoute();
-const ticker = (route.params.ticker as string).toUpperCase();
+const ticker = computed(() => (route.params.ticker as string).toUpperCase());
 
 const selectedRange = ref(104);
 const ranges = [
@@ -84,12 +84,13 @@ let mainChart: IChartApi | null = null;
 let macdChart: IChartApi | null = null;
 let rsiChart: IChartApi | null = null;
 
+// key 用 ticker 保证客户端导航时重新请求
 const { data, pending, error } = useFetch<any>("/api/stocks/weekly", {
   query: computed(() => ({
-    ticker,
+    ticker: ticker.value,
     weeks: selectedRange.value,
   })),
-  watch: [selectedRange],
+  watch: [ticker, selectedRange],
 });
 
 const weekChange = computed(() => {
