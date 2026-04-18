@@ -464,12 +464,14 @@ export interface PreFilterConfig {
   minPrice: number;       // 最低股价（排除仙股），默认 $5
   minAvgDollarVol: number; // 近 20 日最低日均成交额，默认 $100 万
   maxInactiveDays: number; // 最近 N 天必须有交易记录，默认 60
+  minWeeklyDollarVol: number; // 最近 20 周平均周成交额最低值，默认 $1 亿
 }
 
 const DEFAULT_PRE_FILTER: PreFilterConfig = {
   minPrice: 5,
   minAvgDollarVol: 1_000_000,
   maxInactiveDays: 60,
+  minWeeklyDollarVol: 100_000_000,  // $100M — 周成交额不小于 1 亿美金
 };
 
 /**
@@ -485,7 +487,7 @@ export function runScreenerScan(
 ): { leftCount: number; rightCount: number; preFilterStats: { total: number; passed: number } } {
   const filter = { ...DEFAULT_PRE_FILTER, ...preFilter };
   console.log(`[Screener] 开始扫描 ${scanDate}，最低分 ${minScore}`);
-  console.log(`[Screener] 预筛选: 股价≥$${filter.minPrice}, 日均成交额≥$${(filter.minAvgDollarVol / 1e6).toFixed(1)}M, ${filter.maxInactiveDays}天内有交易`);
+  console.log(`[Screener] 预筛选: 股价≥$${filter.minPrice}, 日均成交额≥$${(filter.minAvgDollarVol / 1e6).toFixed(1)}M, 周均成交额≥$${(filter.minWeeklyDollarVol / 1e6).toFixed(0)}M, ${filter.maxInactiveDays}天内有交易`);
   const t0 = Date.now();
 
   // 计算活跃截止日期
@@ -606,6 +608,7 @@ export function runScreenerScan(
   // 分批处理
   const batchSize = 200;
   let batch: ScreenerResult[] = [];
+  let volumeFiltered = 0;
 
   for (let i = 0; i < tickers.length; i++) {
     const { ticker } = tickers[i];
@@ -628,6 +631,12 @@ export function runScreenerScan(
     const recentBars = validBars.slice(-20);
     const avgDollarVol =
       recentBars.reduce((a, b) => a + b.close * b.volume, 0) / recentBars.length;
+
+    // 周均成交额过滤（默认 $100M）
+    if (avgDollarVol < filter.minWeeklyDollarVol) {
+      volumeFiltered++;
+      continue;
+    }
 
     // 计算所有技术指标（一次性）
     const indicators = calcAllIndicators(validBars);
@@ -688,7 +697,7 @@ export function runScreenerScan(
 
   const elapsed = Date.now() - t0;
   console.log(
-    `[Screener] 扫描完成: 左侧 ${leftCount}, 右侧 ${rightCount}, 耗时 ${(elapsed / 1000).toFixed(1)}s`
+    `[Screener] 扫描完成: 左侧 ${leftCount}, 右侧 ${rightCount}, 周成交额过滤 ${volumeFiltered} 个, 耗时 ${(elapsed / 1000).toFixed(1)}s`
   );
 
   return {
