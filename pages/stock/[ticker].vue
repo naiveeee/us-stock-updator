@@ -84,14 +84,27 @@ let mainChart: IChartApi | null = null;
 let macdChart: IChartApi | null = null;
 let rsiChart: IChartApi | null = null;
 
-// 用 useAsyncData + $fetch 完全控制请求，避免 useFetch SSR 缓存导致客户端导航不刷新
-const { data, pending, error, refresh } = useAsyncData(
-  () => `weekly-${ticker.value}-${selectedRange.value}`,
-  () => $fetch<any>("/api/stocks/weekly", {
-    params: { ticker: ticker.value, weeks: selectedRange.value },
-  }),
-  { watch: [ticker, selectedRange] },
-);
+// 完全手动控制请求，不依赖 useFetch/useAsyncData 的缓存机制
+const data = ref<any>(null);
+const pending = ref(true);
+const error = ref<Error | null>(null);
+
+async function fetchData() {
+  pending.value = true;
+  error.value = null;
+  try {
+    data.value = await $fetch<any>("/api/stocks/weekly", {
+      params: { ticker: ticker.value, weeks: selectedRange.value },
+    });
+  } catch (e: any) {
+    error.value = e;
+  } finally {
+    pending.value = false;
+  }
+}
+
+// ticker 或 range 变化时重新请求
+watch([ticker, selectedRange], () => fetchData(), { immediate: true });
 
 const weekChange = computed(() => {
   if (!data.value?.bars?.length || data.value.bars.length < 2) return null;

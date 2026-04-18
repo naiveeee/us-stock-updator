@@ -29,4 +29,16 @@ export default defineNuxtConfig({
     // 预设为 Node.js 服务器
     preset: "node-server",
   },
+
+  // dev 模式：Vite proxy 将 /api 请求代理到远程服务器
+  vite: {
+    server: {
+      proxy: {
+        "/api": {
+          target: "http://119.91.46.43:3456",
+          changeOrigin: true,
+        },
+      },
+    },
+  },
 });
