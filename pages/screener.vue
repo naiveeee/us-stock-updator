@@ -30,6 +30,15 @@
 
     <!-- 筛选栏 -->
     <div class="filter-bar">
+      <div class="search-box">
+        <input
+          v-model="searchTicker"
+          placeholder="搜索 Ticker..."
+          class="search-input"
+          @keyup.enter="currentPage = 1"
+        />
+        <span v-if="searchTicker" class="search-clear" @click="searchTicker = ''">✕</span>
+      </div>
       <select v-model="filterGrade" class="filter-select">
         <option value="">全部等级</option>
         <option value="A">🔴 A级 (≥80)</option>
@@ -145,6 +154,7 @@
 
 <script setup lang="ts">
 const activeSide = ref<"left" | "right">("left");
+const searchTicker = ref("");
 const filterGrade = ref("");
 const sortBy = ref("score");
 const currentPage = ref(1);
@@ -155,12 +165,13 @@ const pipelineRunning = ref(false);
 const { data, pending, error, refresh } = useFetch<any>("/api/screener/results", {
   query: computed(() => ({
     side: activeSide.value,
+    ticker: searchTicker.value || undefined,
     grade: filterGrade.value || undefined,
     sort: sortBy.value,
     limit: pageSize,
     offset: (currentPage.value - 1) * pageSize,
   })),
-  watch: [activeSide, filterGrade, sortBy, currentPage],
+  watch: [activeSide, searchTicker, filterGrade, sortBy, currentPage],
 });
 
 const totalPages = computed(() => {
@@ -227,6 +238,7 @@ watch(activeSide, () => {
 });
 watch(filterGrade, () => { currentPage.value = 1; });
 watch(sortBy, () => { currentPage.value = 1; });
+watch(searchTicker, () => { currentPage.value = 1; });
 </script>
 
 <style scoped>
@@ -272,7 +284,37 @@ watch(sortBy, () => { currentPage.value = 1; });
   display: flex;
   gap: 0.5rem;
   margin-bottom: 1rem;
+  align-items: center;
 }
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-input {
+  padding: 0.4rem 1.8rem 0.4rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #1a1d27;
+  color: #ddd;
+  font-size: 0.85rem;
+  width: 140px;
+  transition: border-color 0.2s;
+}
+.search-input:focus {
+  outline: none;
+  border-color: #1a73e8;
+}
+.search-input::placeholder { color: #555; }
+.search-clear {
+  position: absolute;
+  right: 6px;
+  color: #666;
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+.search-clear:hover { color: #aaa; }
 .filter-select {
   padding: 0.4rem 0.6rem;
   border-radius: 6px;

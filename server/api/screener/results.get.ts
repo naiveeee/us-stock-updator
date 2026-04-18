@@ -4,6 +4,7 @@
  *
  * 参数：
  *   side       - 'left' / 'right' (必填)
+ *   ticker     - 股票代码搜索 (可选，前缀匹配)
  *   grade      - 'A' / 'B' / 'C' (可选，默认全部)
  *   min_score  - 最低分 (可选)
  *   sort       - 'score' / 'week_change_pct' / 'volume' / 'avg_dollar_volume' (默认 score)
@@ -43,6 +44,13 @@ export default defineEventHandler((event) => {
   if (grade && ["A", "B", "C"].includes(grade)) {
     conditions.push("grade = ?");
     params.push(grade);
+  }
+
+  // ticker 搜索（前缀匹配，支持模糊搜索）
+  const ticker = ((query.ticker as string) || "").toUpperCase().trim();
+  if (ticker) {
+    conditions.push("ticker LIKE ?");
+    params.push(ticker + "%");
   }
 
   const minScore = parseFloat(query.min_score as string);
