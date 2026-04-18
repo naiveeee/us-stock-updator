@@ -458,19 +458,81 @@ function getGrade(score: number): "A" | "B" | "C" {
 // ============================================================
 
 /**
+ * 预筛选配置
+ */
+export interface PreFilterConfig {
+  minPrice: number;       // 最低股价（排除仙股），默认 $5
+  minAvgDollarVol: number; // 近 20 日最低日均成交额，默认 $100 万
+  maxInactiveDays: number; // 最近 N 天必须有交易记录，默认 60
+}
+
+const DEFAULT_PRE_FILTER: PreFilterConfig = {
+  minPrice: 5,
+  minAvgDollarVol: 1_000_000,
+  maxInactiveDays: 60,
+};
+
+/**
  * 运行选股扫描
  * @param minScore 最低分数阈值（低于此分数的不入库）
+ * @param preFilter 预筛选配置（可选，用于覆盖默认值）
  */
 export function runScreenerScan(
   db: Database.Database,
   scanDate: string,
-  minScore = 40
-): { leftCount: number; rightCount: number } {
+  minScore = 40,
+  preFilter: Partial<PreFilterConfig> = {}
+): { leftCount: number; rightCount: number; preFilterStats: { total: number; passed: number } } {
+  const filter = { ...DEFAULT_PRE_FILTER, ...preFilter };
   console.log(`[Screener] 开始扫描 ${scanDate}，最低分 ${minScore}`);
+  console.log(`[Screener] 预筛选: 股价≥$${filter.minPrice}, 日均成交额≥$${(filter.minAvgDollarVol / 1e6).toFixed(1)}M, ${filter.maxInactiveDays}天内有交易`);
   const t0 = Date.now();
 
-  // 获取所有有足够周线数据的 ticker
-  const tickers = db
+  // 计算活跃截止日期
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - filter.maxInactiveDays);
+  const cutoffStr = cutoffDate.toISOString().slice(0, 10);
+
+  // 预筛选：从日线表中筛出符合条件的 ticker
+  // 1. 最近 N 天有交易
+  // 2. 最新收盘价 >= minPrice
+  // 3. 近 20 个交易日平均成交额 >= minAvgDollarVol
+  const preFilterQuery = db.prepare(`
+    WITH latest_bars AS (
+      SELECT ticker, date, close, volume,
+             ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) as rn
+      FROM daily_bars
+      WHERE date >= ?
+    ),
+    latest_close AS (
+      SELECT ticker, close as latest_close, date as latest_date
+      FROM latest_bars
+      WHERE rn = 1
+    ),
+    avg_volume AS (
+      SELECT ticker, AVG(close * volume) as avg_dollar_vol
+      FROM latest_bars
+      WHERE rn <= 20
+      GROUP BY ticker
+    )
+    SELECT lc.ticker
+    FROM latest_close lc
+    JOIN avg_volume av ON lc.ticker = av.ticker
+    WHERE lc.latest_close >= ?
+      AND av.avg_dollar_vol >= ?
+    ORDER BY lc.ticker
+  `);
+
+  const qualifiedTickers = preFilterQuery.all(
+    cutoffStr,
+    filter.minPrice,
+    filter.minAvgDollarVol
+  ) as Array<{ ticker: string }>;
+
+  const qualifiedSet = new Set(qualifiedTickers.map((t) => t.ticker));
+
+  // 再从周线表中取有足够数据的 ticker，取交集
+  const allTickers = db
     .prepare(
       `SELECT ticker, COUNT(*) as cnt FROM weekly_bars
        GROUP BY ticker HAVING cnt >= 30
@@ -478,7 +540,9 @@ export function runScreenerScan(
     )
     .all() as Array<{ ticker: string; cnt: number }>;
 
-  console.log(`[Screener] 共 ${tickers.length} 个 ticker 满足条件`);
+  const tickers = allTickers.filter((t) => qualifiedSet.has(t.ticker));
+
+  console.log(`[Screener] 周线≥30周: ${allTickers.length} 个 → 预筛选后: ${tickers.length} 个 (过滤 ${allTickers.length - tickers.length} 个)`);
 
   // 预编译写入语句
   const insertResult = db.prepare(`
@@ -627,5 +691,9 @@ export function runScreenerScan(
     `[Screener] 扫描完成: 左侧 ${leftCount}, 右侧 ${rightCount}, 耗时 ${(elapsed / 1000).toFixed(1)}s`
   );
 
-  return { leftCount, rightCount };
+  return {
+    leftCount,
+    rightCount,
+    preFilterStats: { total: allTickers.length, passed: tickers.length },
+  };
 }

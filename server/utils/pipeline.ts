@@ -24,6 +24,8 @@ export interface PipelineState {
     leftSignals: number;
     rightSignals: number;
     durationMs: number;
+    preFilterTotal?: number;
+    preFilterPassed?: number;
   } | null;
 }
 
@@ -106,6 +108,8 @@ export async function runPipeline(
       leftSignals: scanResult.leftCount,
       rightSignals: scanResult.rightCount,
       durationMs,
+      preFilterTotal: scanResult.preFilterStats?.total,
+      preFilterPassed: scanResult.preFilterStats?.passed,
     };
 
     // 记录到 pipeline_runs 表
@@ -124,7 +128,7 @@ export async function runPipeline(
     );
 
     console.log(
-      `[Pipeline] 完成: ${stocksProcessed} 股票, ${scanResult.leftCount}L + ${scanResult.rightCount}R 信号, ${(durationMs / 1000).toFixed(1)}s`
+      `[Pipeline] 完成: ${stocksProcessed} 股票聚合, ${scanResult.preFilterStats?.passed ?? '?'}/${scanResult.preFilterStats?.total ?? '?'} 通过预筛选, ${scanResult.leftCount}L + ${scanResult.rightCount}R 信号, ${(durationMs / 1000).toFixed(1)}s`
     );
 
     return "done";

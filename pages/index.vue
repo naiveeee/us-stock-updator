@@ -55,7 +55,10 @@
           {{ pipelineStageText }}
         </span>
         <template v-if="pipelineState.lastResult">
-          | {{ pipelineState.lastResult.stocksProcessed }} 股票
+          | {{ pipelineState.lastResult.stocksProcessed }} 股票聚合
+          <template v-if="pipelineState.lastResult.preFilterPassed">
+            | 预筛选 {{ pipelineState.lastResult.preFilterPassed }}/{{ pipelineState.lastResult.preFilterTotal }}
+          </template>
           | 左侧 {{ pipelineState.lastResult.leftSignals }} + 右侧 {{ pipelineState.lastResult.rightSignals }} 信号
           | {{ (pipelineState.lastResult.durationMs / 1000).toFixed(1) }}s
         </template>
