@@ -1,122 +1,109 @@
 /**
- * 指数成分股管理
+ * 指数成分股管理（硬编码版本）
  *
- * 从 Wikipedia 爬取 S&P 500 和 NASDAQ-100 成分股列表
- * 存入 index_components 表供 screener 过滤
+ * SP500 和 NASDAQ-100 成分股列表直接内置
+ * 避免国内服务器无法访问 Wikipedia 的问题
+ *
+ * 数据来源: Wikipedia (2026-04-19)
+ * SP500: https://en.wikipedia.org/wiki/List_of_S%26P_500_companies
+ * NDX100: https://en.wikipedia.org/wiki/Nasdaq-100
  */
 import type Database from "better-sqlite3";
-
-// Wikipedia 页面中的表格解析
-const WIKI_URLS: Record<string, string> = {
-  sp500: "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-  nasdaq100: "https://en.wikipedia.org/wiki/Nasdaq-100",
-};
 
 interface ComponentStock {
   ticker: string;
   companyName: string;
 }
 
-/**
- * 从 HTML 中提取表格数据
- * Wikipedia 的 SP500 页面第一个表格的第一列是 ticker，第二列是公司名
- * NASDAQ-100 页面结构类似
- */
-function parseWikiTable(html: string, indexName: string): ComponentStock[] {
-  const stocks: ComponentStock[] = [];
+// ─── S&P 500 成分股 (503 只, 2026-04-19 更新) ───
+const SP500_TICKERS = [
+  "MMM","AOS","ABT","ABBV","ACN","ADBE","AMD","AES","AFL","A",
+  "APD","ABNB","AKAM","ALB","ARE","ALGN","ALLE","LNT","ALL","GOOGL",
+  "GOOG","MO","AMZN","AMCR","AEE","AEP","AXP","AIG","AMT","AWK",
+  "AMP","AME","AMGN","APH","ADI","AON","APA","APO","AAPL","AMAT",
+  "APP","APTV","ACGL","ADM","ARES","ANET","AJG","AIZ","T","ATO",
+  "ADSK","ADP","AZO","AVB","AVY","AXON","BKR","BALL","BAC","BAX",
+  "BDX","BRK-B","BBY","TECH","BIIB","BLK","BX","XYZ","BK","BA",
+  "BKNG","BSX","BMY","AVGO","BR","BRO","BF-B","BLDR","BG","BXP",
+  "CHRW","CDNS","CPT","CPB","COF","CAH","CCL","CARR","CVNA","CASY",
+  "CAT","CBOE","CBRE","CDW","COR","CNC","CNP","CF","CRL","SCHW",
+  "CHTR","CVX","CMG","CB","CHD","CIEN","CI","CINF","CTAS","CSCO",
+  "C","CFG","CLX","CME","CMS","KO","CTSH","COHR","COIN","CL",
+  "CMCSA","FIX","CAG","COP","ED","STZ","CEG","COO","CPRT","GLW",
+  "CPAY","CTVA","CSGP","COST","CTRA","CRH","CRWD","CCI","CSX","CMI",
+  "CVS","DHR","DRI","DDOG","DVA","DECK","DE","DELL","DAL","DVN",
+  "DXCM","FANG","DLR","DG","DLTR","D","DPZ","DASH","DOV","DOW",
+  "DHI","DTE","DUK","DD","ETN","EBAY","SATS","ECL","EIX","EW",
+  "EA","ELV","EME","EMR","ETR","EOG","EPAM","EQT","EFX","EQIX",
+  "EQR","ERIE","ESS","EL","EG","EVRG","ES","EXC","EXE","EXPE",
+  "EXPD","EXR","XOM","FFIV","FDS","FICO","FAST","FRT","FDX","FIS",
+  "FITB","FSLR","FE","FISV","F","FTNT","FTV","FOXA","FOX","BEN",
+  "FCX","GRMN","IT","GE","GEHC","GEV","GEN","GNRC","GD","GIS",
+  "GM","GPC","GILD","GPN","GL","GDDY","GS","HAL","HIG","HAS",
+  "HCA","DOC","HSIC","HSY","HPE","HLT","HD","HON","HRL","HST",
+  "HWM","HPQ","HUBB","HUM","HBAN","HII","IBM","IEX","IDXX","ITW",
+  "INCY","IR","PODD","INTC","IBKR","ICE","IFF","IP","INTU","ISRG",
+  "IVZ","INVH","IQV","IRM","JBHT","JBL","JKHY","J","JNJ","JCI",
+  "JPM","KVUE","KDP","KEY","KEYS","KMB","KIM","KMI","KKR","KLAC",
+  "KHC","KR","LHX","LH","LRCX","LVS","LDOS","LEN","LII","LLY",
+  "LIN","LYV","LMT","L","LOW","LULU","LITE","LYB","MTB","MPC",
+  "MAR","MRSH","MLM","MAS","MA","MKC","MCD","MCK","MDT","MRK",
+  "META","MET","MTD","MGM","MCHP","MU","MSFT","MAA","MRNA","TAP",
+  "MDLZ","MPWR","MNST","MCO","MS","MOS","MSI","MSCI","NDAQ","NTAP",
+  "NFLX","NEM","NWSA","NWS","NEE","NKE","NI","NDSN","NSC","NTRS",
+  "NOC","NCLH","NRG","NUE","NVDA","NVR","NXPI","ORLY","OXY","ODFL",
+  "OMC","ON","OKE","ORCL","OTIS","PCAR","PKG","PLTR","PANW","PSKY",
+  "PH","PAYX","PYPL","PNR","PEP","PFE","PCG","PM","PSX","PNW",
+  "PNC","POOL","PPG","PPL","PFG","PG","PGR","PLD","PRU","PEG",
+  "PTC","PSA","PHM","PWR","QCOM","DGX","Q","RL","RJF","RTX",
+  "O","REG","REGN","RF","RSG","RMD","RVTY","HOOD","ROK","ROL",
+  "ROP","ROST","RCL","SPGI","CRM","SNDK","SBAC","SLB","STX","SRE",
+  "NOW","SHW","SPG","SWKS","SJM","SW","SNA","SOLV","SO","LUV",
+  "SWK","SBUX","STT","STLD","STE","SYK","SMCI","SYF","SNPS","SYY",
+  "TMUS","TROW","TTWO","TPR","TRGP","TGT","TEL","TDY","TER","TSLA",
+  "TXN","TPL","TXT","TMO","TJX","TKO","TTD","TSCO","TT","TDG",
+  "TRV","TRMB","TFC","TYL","TSN","USB","UBER","UDR","ULTA","UNP",
+  "UAL","UPS","URI","UNH","UHS","VLO","VTR","VLTO","VRSN","VRSK",
+  "VZ","VRTX","VRT","VTRS","VICI","V","VST","VMC","WRB","GWW",
+  "WAB","WMT","DIS","WBD","WM","WAT","WEC","WFC","WELL","WST",
+  "WDC","WY","WSM","WMB","WTW","WDAY","WYNN","XEL","XYL","YUM",
+  "ZBRA","ZBH","ZTS",
+] as const;
 
-  // 找到 wikitable 类的表格
-  const tableRegex = /<table[^>]*class="[^"]*wikitable[^"]*"[^>]*>([\s\S]*?)<\/table>/gi;
-  const tables: string[] = [];
-  let match;
-  while ((match = tableRegex.exec(html)) !== null) {
-    tables.push(match[1]);
-  }
+// ─── NASDAQ-100 成分股 (101 只, 2026-01-20 更新) ───
+const NASDAQ100_TICKERS = [
+  "ADBE","AMD","ABNB","ALNY","GOOGL","GOOG","AMZN","AEP","AMGN","ADI",
+  "AAPL","AMAT","APP","ARM","ASML","TEAM","ADSK","ADP","AXON","BKR",
+  "BKNG","AVGO","CDNS","CHTR","CTAS","CSCO","CCEP","CTSH","CMCSA","CEG",
+  "CPRT","CSGP","COST","CRWD","CSX","DDOG","DXCM","FANG","DASH","EA",
+  "EXC","FAST","FER","FTNT","GEHC","GILD","HON","IDXX","INSM","INTC",
+  "INTU","ISRG","KDP","KLAC","KHC","LRCX","LIN","MAR","MRVL","MELI",
+  "META","MCHP","MU","MSFT","MSTR","MDLZ","MPWR","MNST","NFLX","NVDA",
+  "NXPI","ORLY","ODFL","PCAR","PLTR","PANW","PAYX","PYPL","PDD","PEP",
+  "QCOM","REGN","ROP","ROST","STX","SHOP","SBUX","SNPS","TMUS","TTWO",
+  "TSLA","TXN","TRI","VRSK","VRTX","WMT","WBD","WDC","WDAY","XEL",
+  "ZS",
+] as const;
 
-  if (tables.length === 0) return stocks;
-
-  // SP500: 第一个表格；NASDAQ100: 第四个表格（成分股列表）
-  let targetTable: string;
-  if (indexName === "nasdaq100") {
-    // NASDAQ-100 的成分股表格通常是第4个 wikitable
-    targetTable = tables.length >= 4 ? tables[3] : tables[tables.length - 1];
-  } else {
-    targetTable = tables[0];
-  }
-
-  // 解析行
-  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-  const rows: string[] = [];
-  while ((match = rowRegex.exec(targetTable)) !== null) {
-    rows.push(match[1]);
-  }
-
-  // 跳过表头
-  for (let i = 1; i < rows.length; i++) {
-    const cellRegex = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
-    const cells: string[] = [];
-    while ((match = cellRegex.exec(rows[i])) !== null) {
-      // 清除 HTML 标签，保留文本
-      const text = match[1]
-        .replace(/<[^>]+>/g, "")
-        .replace(/&amp;/g, "&")
-        .replace(/&#160;/g, " ")
-        .replace(/\n/g, "")
-        .trim();
-      cells.push(text);
-    }
-
-    if (cells.length >= 2) {
-      const ticker = cells[0].trim().replace(/\s+/g, "");
-      const companyName = cells[1].trim();
-
-      if (ticker && /^[A-Z./-]+$/i.test(ticker) && ticker.length <= 10) {
-        // Wikipedia 用 BRK.B 但市场数据用 BRK-B 或 BRK.B，统一处理
-        const normalizedTicker = ticker.replace(/\./g, "-");
-        stocks.push({ ticker: normalizedTicker, companyName });
-      }
-    }
-  }
-
-  return stocks;
-}
-
-/**
- * 从 Wikipedia 获取指数成分股
- */
-async function fetchFromWikipedia(indexName: string): Promise<ComponentStock[]> {
-  const url = WIKI_URLS[indexName];
-  if (!url) throw new Error(`Unknown index: ${indexName}`);
-
-  const resp = await $fetch<string>(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; StockScreener/1.0)",
-      Accept: "text/html",
-    },
-    responseType: "text",
-    timeout: 30_000,
-  });
-
-  return parseWikiTable(resp, indexName);
-}
+const BUILTIN_DATA: Record<string, readonly string[]> = {
+  sp500: SP500_TICKERS,
+  nasdaq100: NASDAQ100_TICKERS,
+};
 
 /**
- * 刷新指定指数的成分股到数据库
+ * 刷新指定指数的成分股到数据库（从内置数据）
  */
 export async function refreshIndexComponents(
   db: Database.Database,
   indexName: string
 ): Promise<{ count: number; indexName: string }> {
-  console.log(`[Index] 开始刷新 ${indexName} 成分股...`);
-
-  const stocks = await fetchFromWikipedia(indexName);
-  if (stocks.length === 0) {
-    throw new Error(`Failed to parse ${indexName} components from Wikipedia`);
+  const tickers = BUILTIN_DATA[indexName];
+  if (!tickers) {
+    throw new Error(`Unknown index: ${indexName}. Available: ${Object.keys(BUILTIN_DATA).join(", ")}`);
   }
 
-  console.log(`[Index] ${indexName}: 解析到 ${stocks.length} 只股票`);
+  console.log(`[Index] 写入 ${indexName} 成分股: ${tickers.length} 只`);
 
-  // 清除旧数据并写入新数据
   const deleteStmt = db.prepare("DELETE FROM index_components WHERE index_name = ?");
   const insertStmt = db.prepare(
     "INSERT OR REPLACE INTO index_components (index_name, ticker, company_name, updated_at) VALUES (?, ?, ?, ?)"
@@ -126,13 +113,13 @@ export async function refreshIndexComponents(
 
   db.transaction(() => {
     deleteStmt.run(indexName);
-    for (const s of stocks) {
-      insertStmt.run(indexName, s.ticker, s.companyName, now);
+    for (const ticker of tickers) {
+      insertStmt.run(indexName, ticker, "", now);
     }
   })();
 
-  console.log(`[Index] ${indexName}: 已写入 ${stocks.length} 只股票`);
-  return { count: stocks.length, indexName };
+  console.log(`[Index] ${indexName}: 已写入 ${tickers.length} 只股票`);
+  return { count: tickers.length, indexName };
 }
 
 /**
@@ -142,7 +129,7 @@ export async function refreshAllIndexComponents(
   db: Database.Database
 ): Promise<Array<{ count: number; indexName: string }>> {
   const results = [];
-  for (const indexName of Object.keys(WIKI_URLS)) {
+  for (const indexName of Object.keys(BUILTIN_DATA)) {
     try {
       const r = await refreshIndexComponents(db, indexName);
       results.push(r);

@@ -1,7 +1,7 @@
 /**
  * POST /api/index/refresh
  *
- * 刷新指数成分股（从 Wikipedia 爬取）
+ * 刷新指数成分股（从内置数据写入 DB）
  * Body: { index?: 'sp500' | 'nasdaq100' | 'all' }
  */
 export default defineEventHandler(async (event) => {
