@@ -39,6 +39,11 @@
         />
         <span v-if="searchTicker" class="search-clear" @click="searchTicker = ''">✕</span>
       </div>
+      <select v-model="filterIndex" class="filter-select">
+        <option value="">全部股票</option>
+        <option value="sp500">S&amp;P 500</option>
+        <option value="nasdaq100">NASDAQ 100</option>
+      </select>
       <select v-model="filterGrade" class="filter-select">
         <option value="">全部等级</option>
         <option value="A">🔴 A级 (≥80)</option>
@@ -50,6 +55,9 @@
         <option value="week_change_pct">按涨跌幅</option>
         <option value="avg_dollar_volume">按成交额</option>
       </select>
+      <button @click="refreshIndex" :disabled="indexRefreshing" class="btn btn-sm btn-outline" title="从 Wikipedia 更新指数成分股">
+        {{ indexRefreshing ? '⏳' : '🔄' }} 更新成分股
+      </button>
     </div>
 
     <!-- 加载态 -->
@@ -155,23 +163,26 @@
 <script setup lang="ts">
 const activeSide = ref<"left" | "right">("left");
 const searchTicker = ref("");
+const filterIndex = ref("");
 const filterGrade = ref("");
 const sortBy = ref("score");
 const currentPage = ref(1);
 const pageSize = 50;
 const expandedTicker = ref<string | null>(null);
 const pipelineRunning = ref(false);
+const indexRefreshing = ref(false);
 
 const { data, pending, error, refresh } = useFetch<any>("/api/screener/results", {
   query: computed(() => ({
     side: activeSide.value,
     ticker: searchTicker.value || undefined,
+    index: filterIndex.value || undefined,
     grade: filterGrade.value || undefined,
     sort: sortBy.value,
     limit: pageSize,
     offset: (currentPage.value - 1) * pageSize,
   })),
-  watch: [activeSide, searchTicker, filterGrade, sortBy, currentPage],
+  watch: [activeSide, searchTicker, filterIndex, filterGrade, sortBy, currentPage],
 });
 
 const totalPages = computed(() => {
@@ -237,8 +248,21 @@ watch(activeSide, () => {
   expandedTicker.value = null;
 });
 watch(filterGrade, () => { currentPage.value = 1; });
+watch(filterIndex, () => { currentPage.value = 1; });
 watch(sortBy, () => { currentPage.value = 1; });
 watch(searchTicker, () => { currentPage.value = 1; });
+
+async function refreshIndex() {
+  indexRefreshing.value = true;
+  try {
+    await $fetch("/api/index/refresh", { method: "POST", body: { index: "all" } });
+    await refresh();
+  } catch (e: any) {
+    console.error("刷新成分股失败:", e);
+  } finally {
+    indexRefreshing.value = false;
+  }
+}
 </script>
 
 <style scoped>
@@ -323,6 +347,19 @@ watch(searchTicker, () => { currentPage.value = 1; });
   color: #ddd;
   font-size: 0.85rem;
 }
+.btn-outline {
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid #444;
+  background: transparent;
+  color: #aaa;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.btn-outline:hover { border-color: #1a73e8; color: #fff; }
+.btn-outline:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .screener-table { border: 1px solid #2a2d37; border-radius: 8px; overflow: hidden; }
 .result-row { cursor: pointer; }

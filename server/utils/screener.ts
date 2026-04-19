@@ -12,6 +12,7 @@ import {
   detectMACDBottomDivergence,
   detectRSIBottomDivergence,
 } from "./indicators";
+import { getIndexTickers } from "./index-components";
 
 // ============================================================
 // 类型定义
@@ -544,7 +545,24 @@ export function runScreenerScan(
 
   const tickers = allTickers.filter((t) => qualifiedSet.has(t.ticker));
 
-  console.log(`[Screener] 周线≥30周: ${allTickers.length} 个 → 预筛选后: ${tickers.length} 个 (过滤 ${allTickers.length - tickers.length} 个)`);
+  // 指数成分股过滤：如果 index_components 表有数据，只扫成分股
+  const indexRows = db
+    .prepare("SELECT COUNT(*) as cnt FROM index_components")
+    .get() as { cnt: number };
+  let indexFilterCount = 0;
+  let filteredTickers: typeof tickers;
+
+  if (indexRows.cnt > 0) {
+    const indexSet = getIndexTickers(db, ["sp500", "nasdaq100"]);
+    filteredTickers = tickers.filter((t) => indexSet.has(t.ticker));
+    indexFilterCount = tickers.length - filteredTickers.length;
+    console.log(`[Screener] 指数成分股过滤: ${tickers.length} → ${filteredTickers.length} (排除 ${indexFilterCount} 非成分股)`);
+  } else {
+    filteredTickers = tickers;
+    console.log(`[Screener] 未配置指数成分股，扫描全部 ${tickers.length} 个标的`);
+  }
+
+  console.log(`[Screener] 周线≥30周: ${allTickers.length} 个 → 预筛选后: ${filteredTickers.length} 个`);
 
   // 预编译写入语句
   const insertResult = db.prepare(`
@@ -610,8 +628,8 @@ export function runScreenerScan(
   let batch: ScreenerResult[] = [];
   let volumeFiltered = 0;
 
-  for (let i = 0; i < tickers.length; i++) {
-    const { ticker } = tickers[i];
+  for (let i = 0; i < filteredTickers.length; i++) {
+    const { ticker } = filteredTickers[i];
     const weeklyBars = selectWeekly.all(ticker) as Bar[];
 
     if (weeklyBars.length < 30) continue;
@@ -685,7 +703,7 @@ export function runScreenerScan(
 
     if ((i + 1) % 2000 === 0) {
       console.log(
-        `[Screener] 进度 ${i + 1}/${tickers.length}, 左侧 ${leftCount}, 右侧 ${rightCount}`
+        `[Screener] 进度 ${i + 1}/${filteredTickers.length}, 左侧 ${leftCount}, 右侧 ${rightCount}`
       );
     }
   }
@@ -703,6 +721,6 @@ export function runScreenerScan(
   return {
     leftCount,
     rightCount,
-    preFilterStats: { total: allTickers.length, passed: tickers.length },
+    preFilterStats: { total: allTickers.length, passed: filteredTickers.length },
   };
 }

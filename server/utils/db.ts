@@ -128,6 +128,17 @@ export function getDb(): Database.Database {
       error_msg    TEXT,
       duration_ms  INTEGER DEFAULT 0
     );
+
+    -- 指数成分股
+    CREATE TABLE IF NOT EXISTS index_components (
+      index_name   TEXT NOT NULL,
+      ticker       TEXT NOT NULL,
+      company_name TEXT,
+      updated_at   TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (index_name, ticker)
+    );
+    CREATE INDEX IF NOT EXISTS idx_index_components_ticker
+      ON index_components(ticker);
   `);
 
   return _db;
