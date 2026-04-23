@@ -61,6 +61,20 @@ export function getDb(): Database.Database {
       fetched_at   TEXT,
       http_status  INTEGER DEFAULT 0
     );
+
+    -- RS Rating（IBD 相对强度评级）
+    CREATE TABLE IF NOT EXISTS rs_ratings (
+      ticker       TEXT NOT NULL,
+      date         TEXT NOT NULL,
+      score        REAL,           -- 加权原始得分
+      rating       INTEGER,        -- 1-99 百分位排名（IBD 标准）
+      percentile   REAL,           -- 0.00-100.00 精确百分位
+      PRIMARY KEY (ticker, date)
+    );
+    CREATE INDEX IF NOT EXISTS idx_rs_ratings_date
+      ON rs_ratings(date);
+    CREATE INDEX IF NOT EXISTS idx_rs_ratings_ticker
+      ON rs_ratings(ticker);
   `);
 
   return _db;

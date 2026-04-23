@@ -10,15 +10,19 @@
     "start": "node .output/server/index.mjs",
     "fetch": "node scripts/fetch.mjs",
     "fetch:status": "node scripts/status.mjs",
-    "fetch:retry": "node scripts/fetch.mjs --retry-errors"
+    "fetch:retry": "node scripts/fetch.mjs --retry-errors",
+    "mcp": "npx tsx mcp-server.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^11.7.0",
     "lightweight-charts": "^4.2.3",
-    "nuxt": "^3.16.0"
+    "nuxt": "^3.16.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.12"
+    "@types/better-sqlite3": "^7.6.12",
+    "tsx": "^4.21.0"
   },
   "engines": {
     "node": ">=18.0.0"

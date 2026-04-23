@@ -11,6 +11,7 @@
  */
 import { getDb } from "../utils/db";
 import { fetchGroupedDaily } from "../utils/massive";
+import { computeAndSaveRS } from "../utils/rs-rating";
 
 // ── 配置 ──
 const TARGET_HOUR_ET = 17; // 美东 17:00
@@ -162,6 +163,17 @@ async function cronCheck() {
     }
 
     console.log(`[Cron] 采集完成: ${count} 只股票`);
+
+    // 计算当天 RS Rating
+    try {
+      console.log("[Cron] 开始计算 RS Rating...");
+      const db = getDb();
+      const rsCount = computeAndSaveRS(db, todayStr);
+      console.log(`[Cron] RS Rating 计算完成: ${rsCount} 只股票`);
+    } catch (err: any) {
+      console.error(`[Cron] RS Rating 计算失败: ${err?.message || err}`);
+    }
+
     console.log(`[Cron] ════════════════════════════════════════\n`);
   } catch (err: any) {
     console.error(`[Cron] 执行异常: ${err?.message || err}`);
@@ -177,7 +189,7 @@ export default defineNitroPlugin((nitro) => {
     return;
   }
 
-  console.log(`[Cron] 定时任务已启动, 每工作日美东 ${TARGET_HOUR_ET}:00 自动采集当日数据`);
+  console.log(`[Cron] 定时任务已启动, 每工作日美东 ${TARGET_HOUR_ET}:00 自动采集数据并计算 RS Rating`);
 
   // 启动定时检查
   cronTimer = setInterval(() => {
