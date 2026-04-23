@@ -2,9 +2,7 @@
  * Cron 定时任务插件
  *
  * 每个工作日美东 17:00（收盘后 1 小时）自动执行：
- *   1. 采集当天日线数据（Grouped Daily）
- *   2. 增量周线聚合
- *   3. 选股扫描
+ *   采集当天日线数据（Grouped Daily）
  *
  * 控制逻辑：
  * - 每分钟检查一次是否到了触发时间
@@ -13,7 +11,6 @@
  */
 import { getDb } from "../utils/db";
 import { fetchGroupedDaily } from "../utils/massive";
-import { runPipeline } from "../utils/pipeline";
 
 // ── 配置 ──
 const TARGET_HOUR_ET = 17; // 美东 17:00
@@ -156,23 +153,15 @@ async function cronCheck() {
       return;
     }
 
-    // Step 1: 采集当天数据
+    // 采集当天数据
     const count = await fetchToday(todayStr, apiKey);
 
     if (count < 0) {
-      console.error("[Cron] ❌ 采集失败，跳过后续流水线");
+      console.error("[Cron] ❌ 采集失败");
       return;
     }
 
-    // Step 2: 增量流水线（聚合 + 扫描）
-    console.log("[Cron] 开始增量流水线...");
-    const db = getDb();
-    const result = await runPipeline(db, {
-      fullRebuild: false,
-      triggerType: "cron",
-    });
-
-    console.log(`[Cron] 流水线完成: ${result}`);
+    console.log(`[Cron] 采集完成: ${count} 只股票`);
     console.log(`[Cron] ════════════════════════════════════════\n`);
   } catch (err: any) {
     console.error(`[Cron] 执行异常: ${err?.message || err}`);
@@ -188,8 +177,7 @@ export default defineNitroPlugin((nitro) => {
     return;
   }
 
-  console.log(`[Cron] 定时任务已启动, 每工作日美东 ${TARGET_HOUR_ET}:00 自动执行`);
-  console.log(`[Cron] 流程: 采集当日数据 → 增量周线聚合 → 选股扫描`);
+  console.log(`[Cron] 定时任务已启动, 每工作日美东 ${TARGET_HOUR_ET}:00 自动采集当日数据`);
 
   // 启动定时检查
   cronTimer = setInterval(() => {

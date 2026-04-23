@@ -1,10 +1,9 @@
 <template>
   <div class="app-shell">
     <nav class="top-nav">
-      <NuxtLink to="/" class="nav-brand">📈 US Stock Screener</NuxtLink>
+      <NuxtLink to="/" class="nav-brand">📈 US Stock Data</NuxtLink>
       <div class="nav-links">
-        <NuxtLink to="/" class="nav-link">🔄 采集</NuxtLink>
-        <NuxtLink to="/screener" class="nav-link">📊 选股</NuxtLink>
+        <NuxtLink to="/" class="nav-link">🔄 数据管理</NuxtLink>
       </div>
     </nav>
     <main class="main-content">
@@ -108,30 +107,7 @@ body {
 .table td { font-variant-numeric: tabular-nums; }
 .table tr:hover { background: #22252f; }
 
-.badge {
-  display: inline-block;
-  padding: 0.15rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-.badge-a { background: #d93025; color: #fff; }
-.badge-b { background: #e8a01a; color: #000; }
-.badge-c { background: #fbbc04; color: #000; }
-
 .text-green { color: #34a853; }
 .text-red { color: #ea4335; }
 .text-muted { color: #888; }
-
-.score-bar-bg {
-  height: 6px;
-  background: #333;
-  border-radius: 3px;
-  overflow: hidden;
-}
-.score-bar-fill {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.3s;
-}
 </style>

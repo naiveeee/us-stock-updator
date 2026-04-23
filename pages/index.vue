@@ -33,38 +33,6 @@
       </div>
     </section>
 
-    <!-- 流水线控制 -->
-    <section class="card">
-      <h2>⚙️ 选股流水线</h2>
-      <div class="actions">
-        <button @click="runDailyUpdate" :disabled="pipelineState?.running" class="btn btn-success">
-          📅 每日更新 (采集+扫描)
-        </button>
-        <button @click="runPipeline(false)" :disabled="pipelineState?.running" class="btn">
-          ▶️ 增量流水线
-        </button>
-        <button @click="runPipeline(true)" :disabled="pipelineState?.running" class="btn btn-warning">
-          🔄 全量重建
-        </button>
-        <button @click="runScanOnly" :disabled="pipelineState?.running" class="btn btn-primary">
-          🔍 仅重新扫描
-        </button>
-      </div>
-      <div v-if="pipelineState" class="pipeline-info">
-        <span :class="{ 'text-green': pipelineState.stage === 'done', 'text-red': pipelineState.stage === 'error' }">
-          {{ pipelineStageText }}
-        </span>
-        <template v-if="pipelineState.lastResult">
-          | {{ pipelineState.lastResult.stocksProcessed }} 股票聚合
-          <template v-if="pipelineState.lastResult.preFilterPassed">
-            | 预筛选 {{ pipelineState.lastResult.preFilterPassed }}/{{ pipelineState.lastResult.preFilterTotal }}
-          </template>
-          | 左侧 {{ pipelineState.lastResult.leftSignals }} + 右侧 {{ pipelineState.lastResult.rightSignals }} 信号
-          | {{ (pipelineState.lastResult.durationMs / 1000).toFixed(1) }}s
-        </template>
-      </div>
-    </section>
-
     <!-- 数据库状态 -->
     <section class="card" v-if="status">
       <h2>📊 数据库状态</h2>
@@ -125,7 +93,6 @@
 const status = ref<any>(null);
 const message = ref("");
 const messageType = ref("");
-const pipelineState = ref<any>(null);
 
 const queryTicker = ref("AAPL");
 const queryFrom = ref(new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
@@ -138,26 +105,11 @@ const progressPct = computed(() => {
   return (p.completed / p.total) * 100;
 });
 
-const pipelineStageText = computed(() => {
-  const s = pipelineState.value;
-  if (!s) return "";
-  const labels: Record<string, string> = {
-    idle: "⬜ 待命",
-    aggregate: "⏳ 聚合中...",
-    scan: "⏳ 扫描中...",
-    done: "✅ 完成",
-    error: "❌ 出错",
-  };
-  return labels[s.stage] || s.stage;
-});
-
 let timer: ReturnType<typeof setInterval> | null = null;
 
 async function refreshStatus() {
   try {
     status.value = await $fetch("/api/fetch/status");
-    const ps = await $fetch<any>("/api/pipeline/status");
-    pipelineState.value = ps.current;
   } catch (e: any) {
     console.error(e);
   }
@@ -195,47 +147,6 @@ async function stopFetch() {
     const res = await $fetch<any>("/api/fetch/stop", { method: "POST" });
     message.value = res.message;
     messageType.value = "info";
-    refreshStatus();
-  } catch (e: any) {
-    message.value = e?.data?.message || e.message;
-    messageType.value = "error";
-  }
-}
-
-async function runPipeline(fullRebuild: boolean) {
-  try {
-    const res = await $fetch<any>("/api/pipeline/run", {
-      method: "POST",
-      body: { fullRebuild },
-    });
-    message.value = res.message;
-    messageType.value = res.status === "done" ? "success" : "info";
-    pipelineState.value = res.state;
-  } catch (e: any) {
-    message.value = e?.data?.message || e.message;
-    messageType.value = "error";
-  }
-}
-
-async function runScanOnly() {
-  try {
-    const res = await $fetch<any>("/api/pipeline/scan-only", { method: "POST" });
-    message.value = res.message;
-    messageType.value = res.status === "done" ? "success" : "info";
-    pipelineState.value = res.state;
-  } catch (e: any) {
-    message.value = e?.data?.message || e.message;
-    messageType.value = "error";
-  }
-}
-
-async function runDailyUpdate() {
-  try {
-    message.value = "正在采集今日数据并运行流水线...";
-    messageType.value = "info";
-    const res = await $fetch<any>("/api/pipeline/daily", { method: "POST" });
-    message.value = `每日更新完成: 采集 ${res.fetchCount} 只股票, 流水线 ${res.pipeline}`;
-    messageType.value = "success";
     refreshStatus();
   } catch (e: any) {
     message.value = e?.data?.message || e.message;
@@ -284,5 +195,4 @@ h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
 .query-form { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .query-form input { padding: 0.5rem; border-radius: 6px; border: 1px solid #333; background: #222; color: #ddd; font-size: 0.85rem; }
 .query-result { margin-top: 1rem; }
-.pipeline-info { margin-top: 0.8rem; font-size: 0.85rem; color: #aaa; }
 </style>
