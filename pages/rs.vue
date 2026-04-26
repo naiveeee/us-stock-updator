@@ -199,21 +199,60 @@ async function fetchTickerInfo() {
 
 async function runBackfill() {
   backfilling.value = true;
-  backfillMsg.value = "正在回填历史 RS Rating，可能需要几分钟...";
+  backfillMsg.value = "正在启动回填...";
   backfillMsgType.value = "msg-info";
   try {
     const res = await $fetch<any>("/api/rs/backfill", { method: "POST" });
-    backfillMsg.value = res.message;
-    backfillMsgType.value = "msg-success";
-    hasRS.value = true;
-    fetchData();
+    if (res.status === "already_running" || res.status === "started") {
+      backfillMsg.value = "回填进行中...";
+      pollBackfillStatus();
+    } else {
+      backfillMsg.value = res.message;
+      backfillMsgType.value = "msg-success";
+      backfilling.value = false;
+    }
   } catch (e: any) {
     backfillMsg.value = e?.data?.message || e.message;
     backfillMsgType.value = "msg-error";
-  } finally {
     backfilling.value = false;
   }
 }
+
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+function pollBackfillStatus() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const s = await $fetch<any>("/api/rs/backfill-status");
+      if (s.running) {
+        const pct = s.total > 0 ? Math.round((s.processed / s.total) * 100) : 0;
+        backfillMsg.value = `回填中: ${s.processed}/${s.total} 天 (${pct}%) — ${s.current}`;
+        backfillMsgType.value = "msg-info";
+      } else {
+        // 完成了
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        backfilling.value = false;
+        if (s.error) {
+          backfillMsg.value = `回填失败: ${s.error}`;
+          backfillMsgType.value = "msg-error";
+        } else {
+          const sec = s.durationMs ? (s.durationMs / 1000).toFixed(1) : "?";
+          backfillMsg.value = `回填完成: ${s.processed} 个交易日, 耗时 ${sec}s`;
+          backfillMsgType.value = "msg-success";
+          hasRS.value = true;
+          fetchData();
+        }
+      }
+    } catch {
+      // 网络错误，继续轮询
+    }
+  }, 2000);
+}
+
+onUnmounted(() => {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+});
 
 function goToStock(ticker: string) {
   navigateTo(`/stock/${ticker}`);
@@ -241,9 +280,19 @@ function nextPage() {
   if (page.value < totalPages.value) { page.value++; fetchData(); }
 }
 
-onMounted(() => {
+onMounted(async () => {
   fetchData();
   fetchSectors();
+  // 检查是否有正在运行的回填任务
+  try {
+    const s = await $fetch<any>("/api/rs/backfill-status");
+    if (s.running) {
+      backfilling.value = true;
+      backfillMsg.value = "回填进行中...";
+      backfillMsgType.value = "msg-info";
+      pollBackfillStatus();
+    }
+  } catch {}
 });
 </script>
 
