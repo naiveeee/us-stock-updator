@@ -1,16 +1,22 @@
 /**
  * GET /api/rs/dates
- * 获取 RS 数据的日期范围（最早、最晚日期）
+ * 获取所有有 RS 数据的交易日列表
+ *
+ * 返回: { dates: string[], earliest, latest }
  */
 export default defineEventHandler(() => {
   const db = getDb();
 
-  const row = db
-    .prepare("SELECT MIN(date) as earliest, MAX(date) as latest FROM rs_ratings")
-    .get() as { earliest: string | null; latest: string | null } | undefined;
+  const rows = db
+    .prepare("SELECT DISTINCT date FROM rs_ratings ORDER BY date ASC")
+    .all() as { date: string }[];
+
+  const dates = rows.map((r) => r.date);
 
   return {
-    earliest: row?.earliest || null,
-    latest: row?.latest || null,
+    dates,
+    earliest: dates[0] || null,
+    latest: dates[dates.length - 1] || null,
+    count: dates.length,
   };
 });

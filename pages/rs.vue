@@ -8,10 +8,11 @@
             type="date"
             v-model="selectedDate"
             @change="onDateChange"
-            :max="latestDate"
-            :min="earliestDate"
             class="date-picker"
           />
+          <button @click="goLatestDate" class="btn btn-small" title="跳到最新">最新</button>
+          <button @click="goPrevDate" class="btn btn-small" title="前一天">◀</button>
+          <button @click="goNextDate" class="btn btn-small" title="后一天">▶</button>
           <span class="text-muted">· {{ data.total }} 只股票</span>
         </div>
       </div>
@@ -139,12 +140,34 @@ const backfillMsgType = ref("");
 const sectors = ref<{ name: string; count: number }[]>([]);
 const fetchingInfo = ref(false);
 const selectedDate = ref("");
-const latestDate = ref("");
-const earliestDate = ref("");
+const rsDates = ref<string[]>([]);
 
 function onDateChange() {
   page.value = 1;
   fetchData();
+}
+
+function goLatestDate() {
+  if (rsDates.value.length > 0) {
+    selectedDate.value = rsDates.value[rsDates.value.length - 1];
+    onDateChange();
+  }
+}
+
+function goPrevDate() {
+  const idx = rsDates.value.indexOf(selectedDate.value);
+  if (idx > 0) {
+    selectedDate.value = rsDates.value[idx - 1];
+    onDateChange();
+  }
+}
+
+function goNextDate() {
+  const idx = rsDates.value.indexOf(selectedDate.value);
+  if (idx >= 0 && idx < rsDates.value.length - 1) {
+    selectedDate.value = rsDates.value[idx + 1];
+    onDateChange();
+  }
 }
 
 const totalPages = computed(() => {
@@ -302,11 +325,14 @@ function nextPage() {
 }
 
 onMounted(async () => {
-  // 获取日期范围
+  // 获取有 RS 数据的日期列表
   try {
-    const dates = await $fetch<any>("/api/rs/dates");
-    if (dates.earliest) earliestDate.value = dates.earliest;
-    if (dates.latest) latestDate.value = dates.latest;
+    const res = await $fetch<any>("/api/rs/dates");
+    rsDates.value = res.dates || [];
+    // 默认选最新日期
+    if (res.latest) {
+      selectedDate.value = res.latest;
+    }
   } catch {}
 
   fetchData();
@@ -352,6 +378,17 @@ onMounted(async () => {
   filter: invert(0.7);
   cursor: pointer;
 }
+
+.btn-small {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  background: #333;
+  color: #ccc;
+  border: 1px solid #444;
+  cursor: pointer;
+}
+.btn-small:hover { background: #444; }
 
 .filters {
   display: flex;
