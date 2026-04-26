@@ -18,6 +18,12 @@
           placeholder="🔍 搜索 ticker..."
           class="filter-input"
         />
+        <select v-model="selectedSector" @change="onSectorChange" class="filter-select">
+          <option value="">全部板块</option>
+          <option v-for="s in sectors" :key="s.name" :value="s.name">
+            {{ s.name }} ({{ s.count }})
+          </option>
+        </select>
         <select v-model="minRating" @change="fetchData" class="filter-select">
           <option :value="0">全部 RS</option>
           <option :value="80">RS ≥ 80</option>
@@ -38,6 +44,9 @@
         <button v-if="!hasRS" @click="runBackfill" :disabled="backfilling" class="btn btn-primary">
           {{ backfilling ? '回填中...' : '⚡ 回填历史 RS' }}
         </button>
+        <button v-if="sectors.length === 0" @click="fetchTickerInfo" :disabled="fetchingInfo" class="btn btn-secondary">
+          {{ fetchingInfo ? '拉取中...' : '🏭 拉取行业数据' }}
+        </button>
       </div>
 
       <div v-if="backfillMsg" class="msg" :class="backfillMsgType">{{ backfillMsg }}</div>
@@ -49,6 +58,8 @@
             <tr>
               <th>#</th>
               <th>Ticker</th>
+              <th>Company</th>
+              <th>Sector</th>
               <th>RS Rating</th>
               <th>Percentile</th>
               <th>Close</th>
@@ -66,6 +77,11 @@
             >
               <td class="text-muted">{{ data.offset + i + 1 }}</td>
               <td class="ticker-cell">{{ row.ticker }}</td>
+              <td class="company-cell">{{ row.company_name || '-' }}</td>
+              <td>
+                <span v-if="row.sector" class="sector-tag">{{ row.sector }}</span>
+                <span v-else class="text-muted">-</span>
+              </td>
               <td>
                 <span class="rs-badge" :class="rsBadgeClass(row.rating)">
                   {{ row.rating }}
@@ -106,12 +122,15 @@ const searchInput = ref("");
 const minRating = ref(0);
 const sortBy = ref("rating");
 const volumeTop = ref(1000);
+const selectedSector = ref("");
 const page = ref(1);
 const pageSize = 50;
 const hasRS = ref(true);
 const backfilling = ref(false);
 const backfillMsg = ref("");
 const backfillMsgType = ref("");
+const sectors = ref<{ name: string; count: number }[]>([]);
+const fetchingInfo = ref(false);
 
 const totalPages = computed(() => {
   if (!data.value) return 1;
@@ -127,6 +146,11 @@ function debouncedFetch() {
   }, 300);
 }
 
+function onSectorChange() {
+  page.value = 1;
+  fetchData();
+}
+
 async function fetchData() {
   try {
     const params: Record<string, string | number> = {
@@ -138,11 +162,38 @@ async function fetchData() {
     };
     if (minRating.value > 0) params.min_rating = minRating.value;
     if (searchInput.value.trim()) params.search = searchInput.value.trim();
+    if (selectedSector.value) params.sector = selectedSector.value;
 
     data.value = await $fetch("/api/rs/ranking", { params });
     hasRS.value = !(data.value.message && data.value.message.includes("No RS data"));
   } catch (e: any) {
     console.error(e);
+  }
+}
+
+async function fetchSectors() {
+  try {
+    const res = await $fetch<any>("/api/ticker-info/sectors");
+    sectors.value = res.sectors || [];
+  } catch {
+    // ticker_info 表可能还没数据
+  }
+}
+
+async function fetchTickerInfo() {
+  fetchingInfo.value = true;
+  backfillMsg.value = "正在拉取 ticker 行业数据（约 20 分钟）...";
+  backfillMsgType.value = "msg-info";
+  try {
+    const res = await $fetch<any>("/api/ticker-info/fetch", { method: "POST" });
+    backfillMsg.value = res.message;
+    backfillMsgType.value = "msg-success";
+    await fetchSectors();
+  } catch (e: any) {
+    backfillMsg.value = e?.data?.message || e.message;
+    backfillMsgType.value = "msg-error";
+  } finally {
+    fetchingInfo.value = false;
   }
 }
 
@@ -190,7 +241,10 @@ function nextPage() {
   if (page.value < totalPages.value) { page.value++; fetchData(); }
 }
 
-onMounted(() => fetchData());
+onMounted(() => {
+  fetchData();
+  fetchSectors();
+});
 </script>
 
 <style scoped>
@@ -236,6 +290,37 @@ onMounted(() => fetchData());
   font-weight: 600;
   color: #fff;
 }
+
+.company-cell {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  color: #999;
+}
+
+.sector-tag {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.72rem;
+  background: #2a3040;
+  color: #8ab4f8;
+  white-space: nowrap;
+}
+
+.btn-secondary {
+  background: #333;
+  color: #ccc;
+  border: 1px solid #555;
+  padding: 0.45rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.btn-secondary:hover { background: #444; }
+.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .rs-badge {
   display: inline-block;

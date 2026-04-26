@@ -75,6 +75,23 @@ export function getDb(): Database.Database {
       ON rs_ratings(date);
     CREATE INDEX IF NOT EXISTS idx_rs_ratings_ticker
       ON rs_ratings(ticker);
+
+    -- Ticker 元数据（行业 / 交易所 / 市值）
+    CREATE TABLE IF NOT EXISTS ticker_info (
+      ticker            TEXT PRIMARY KEY,
+      name              TEXT,              -- 公司名称
+      primary_exchange  TEXT,              -- 交易所: XNAS / XNYS / ARCX ...
+      sic_code          TEXT,              -- SIC 行业代码 (4位)
+      sic_description   TEXT,              -- SIC 行业描述
+      sector            TEXT,              -- 板块大类（由 SIC 前 2 位映射）
+      cik               TEXT,              -- SEC CIK 编号
+      market_cap        REAL,              -- 市值
+      updated_at        TEXT               -- 最后更新时间
+    );
+    CREATE INDEX IF NOT EXISTS idx_ticker_info_sector
+      ON ticker_info(sector);
+    CREATE INDEX IF NOT EXISTS idx_ticker_info_sic
+      ON ticker_info(sic_code);
   `);
 
   return _db;

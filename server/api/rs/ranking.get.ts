@@ -11,6 +11,7 @@
  *   offset       - 偏移量 (可选，默认 0)
  *   search       - ticker 前缀搜索 (可选)
  *   volume_top   - 只展示成交量前 N 名 (可选，默认 1000)
+ *   sector       - 板块过滤 (可选，如 "Technology")
  */
 export default defineEventHandler((event) => {
   const query = getQuery(event);
@@ -35,6 +36,7 @@ export default defineEventHandler((event) => {
   let offset = parseInt(query.offset as string) || 0;
   offset = Math.max(0, offset);
   const search = (query.search as string || "").toUpperCase().trim();
+  const sector = (query.sector as string || "").trim();
 
   const sortFields: Record<string, string> = {
     rating: "r.percentile",
@@ -44,8 +46,7 @@ export default defineEventHandler((event) => {
   const sortBy = sortFields[query.sort_by as string] || "r.percentile";
   const order = (query.order as string) === "asc" ? "ASC" : "DESC";
 
-  // 构建 SQL：rs_ratings JOIN daily_bars，用 volume 子查询做 TOP N 过滤
-  // 先找出该日成交量 TOP N 的 ticker
+  // 构建 SQL：rs_ratings JOIN daily_bars，可选 JOIN ticker_info
   let volumeFilterSql = "";
   const params: any[] = [date, date];
 
@@ -61,7 +62,15 @@ export default defineEventHandler((event) => {
     params.push(date, volumeTop);
   }
 
-  let whereClauses = "r.date = ? AND d.date = ? AND r.ticker = d.ticker";
+  // 是否需要 JOIN ticker_info
+  const needTickerInfo = !!sector;
+
+  let joinClause = "JOIN daily_bars d ON r.ticker = d.ticker AND r.date = d.date";
+  if (needTickerInfo) {
+    joinClause += "\n    JOIN ticker_info ti ON r.ticker = ti.ticker";
+  }
+
+  let whereClauses = "r.date = ? AND d.date = ?";
   whereClauses += volumeFilterSql;
 
   if (minRating > 0) {
@@ -72,23 +81,29 @@ export default defineEventHandler((event) => {
     whereClauses += " AND r.ticker LIKE ?";
     params.push(search + "%");
   }
+  if (sector) {
+    whereClauses += " AND ti.sector = ?";
+    params.push(sector);
+  }
 
   // 总数
   const countSql = `
     SELECT COUNT(*) as total
     FROM rs_ratings r
-    JOIN daily_bars d ON r.ticker = d.ticker AND r.date = d.date
+    ${joinClause}
     WHERE ${whereClauses}
   `;
   const totalRow = db.prepare(countSql).get(...params) as { total: number };
 
-  // 数据
+  // 数据（始终 LEFT JOIN ticker_info 以返回 sector 字段）
   const dataSql = `
     SELECT r.ticker, r.date, r.score, r.rating, r.percentile,
            d.close, d.volume, d.open, d.high, d.low, d.vwap,
-           CASE WHEN d.open > 0 THEN ROUND((d.close - d.open) / d.open * 100, 2) ELSE NULL END as change_pct
+           CASE WHEN d.open > 0 THEN ROUND((d.close - d.open) / d.open * 100, 2) ELSE NULL END as change_pct,
+           ti2.sector, ti2.sic_description, ti2.name as company_name
     FROM rs_ratings r
-    JOIN daily_bars d ON r.ticker = d.ticker AND r.date = d.date
+    ${joinClause}
+    LEFT JOIN ticker_info ti2 ON r.ticker = ti2.ticker
     WHERE ${whereClauses}
     ORDER BY ${sortBy} ${order} NULLS LAST
     LIMIT ? OFFSET ?
@@ -104,6 +119,7 @@ export default defineEventHandler((event) => {
     offset,
     limit,
     volume_top: volumeTop,
+    sector: sector || null,
     results: rows,
   };
 });
