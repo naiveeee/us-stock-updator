@@ -2,11 +2,10 @@
  * IBD RS Rating 计算引擎
  *
  * 算法：
- *   1. 对每只股票取过去 12 个月分 4 个季度的涨跌幅
- *   2. 加权得分 = 0.2*Q1 + 0.2*Q2 + 0.2*Q3 + 0.4*Q4（近期权重更高）
- *   3. 全市场排名，映射到 1-99 rating + 精确 percentile
- *
- * 全量计算（不预先过滤），展示层再按成交量筛选
+ *   1. 取当天成交量 Top 1000 的股票
+ *   2. 对每只取过去 12 个月分 4 个季度的涨跌幅
+ *   3. 加权得分 = 0.2*Q1 + 0.2*Q2 + 0.2*Q3 + 0.4*Q4（近期权重更高）
+ *   4. 在 Top 1000 内排名，映射到 1-99 rating + 精确 percentile
  */
 import type Database from "better-sqlite3";
 
@@ -50,27 +49,33 @@ function getQuarterBounds(asOfDate: string): QuarterBounds[] {
   return quarters;
 }
 
+/** 只对当日成交量 Top N 的 ticker 计算 RS，过滤垃圾股 + 大幅提速 */
+const RS_TOP_N = 1000;
+
 /**
- * 计算单日全市场 RS Rating（内存优化版）
+ * 计算单日 RS Rating（成交量 Top 1000 版）
  *
- * 策略：用 SQL 逐 ticker 查询各季度边界的收盘价，
- * 每只 ticker 只取 2×4=8 行数据，内存占用极低。
- * 适合 3800 万行、24000+ ticker 的大数据库。
+ * 策略：
+ *   1. 取当天成交量前 1000 的 ticker（走 idx_daily_bars_date_volume 索引）
+ *   2. 逐 ticker 用 SQL 查各季度边界收盘价（走主键索引）
+ *   3. 计算加权得分 → 排序 → 百分位排名
  */
 export function computeRSForDate(
   db: Database.Database,
   asOfDate: string
 ): RSResult[] {
   const quarters = getQuarterBounds(asOfDate);
-  const oldestDate = quarters[3].start;
 
-  // 取出时间范围内所有有数据的 ticker
+  // 取当天成交量最大的 Top N ticker
   const tickers = db
     .prepare(
-      `SELECT DISTINCT ticker FROM daily_bars
-       WHERE date >= ? AND date <= ? AND close IS NOT NULL AND close > 0`
+      `SELECT ticker FROM daily_bars
+       WHERE date = ? AND volume IS NOT NULL AND volume > 0
+         AND close IS NOT NULL AND close > 0
+       ORDER BY volume DESC
+       LIMIT ?`
     )
-    .all(oldestDate, asOfDate) as { ticker: string }[];
+    .all(asOfDate, RS_TOP_N) as { ticker: string }[];
 
   if (tickers.length === 0) return [];
 

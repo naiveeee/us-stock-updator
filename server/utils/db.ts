@@ -52,6 +52,9 @@ export function getDb(): Database.Database {
       ON daily_bars(date);
     CREATE INDEX IF NOT EXISTS idx_daily_bars_ticker
       ON daily_bars(ticker);
+    -- 按日期+成交量排序，用于快速取当日 Top N 活跃股
+    CREATE INDEX IF NOT EXISTS idx_daily_bars_date_volume
+      ON daily_bars(date, volume DESC);
 
     CREATE TABLE IF NOT EXISTS fetch_progress (
       date         TEXT PRIMARY KEY,

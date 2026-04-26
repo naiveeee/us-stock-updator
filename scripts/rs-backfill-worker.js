@@ -1,16 +1,20 @@
 /**
- * RS Backfill Worker — 独立进程（内存优化版）
+ * RS Backfill Worker — 独立进程（Top 1000 成交量版）
  *
  * 通过 child_process.fork() 从主进程启动，
  * 通过 IPC (process.send / process.on('message')) 与主进程通信。
  *
- * 关键优化：每只 ticker 只查 5 个价格点（4 个季度边界），
- * 不再一次性加载 12 个月全量 daily_bars 到内存。
+ * 关键优化：
+ * 1. 只取当天成交量前 1000 的 ticker 计算 RS
+ * 2. 每只 ticker 用主键索引查 8 行（4 季度 × 2 边界价格）
+ * 3. 内存占用极低，不会 OOM
  */
 
 const Database = require("better-sqlite3");
 
-// ---- RS 计算逻辑（SQL 优化版） ----
+const RS_TOP_N = 1000;
+
+// ---- RS 计算逻辑 ----
 
 function getQuarterBounds(asOfDate) {
   const d = new Date(asOfDate + "T00:00:00Z");
@@ -29,24 +33,21 @@ function getQuarterBounds(asOfDate) {
 }
 
 /**
- * 内存优化版：用 SQL 聚合每只 ticker 在各季度边界的价格，
- * 而不是加载全量数据到 JS 内存。
- *
- * 策略：
- *   对于每个季度，用 SQL 取每只 ticker 在 start 和 end 附近的收盘价，
- *   然后在 JS 中计算收益率和加权得分。
+ * 计算单日 RS Rating — 只算当天成交量 Top 1000
  */
 function computeRSForDate(db, asOfDate) {
   const quarters = getQuarterBounds(asOfDate);
-  const oldestDate = quarters[3].start;
 
-  // 先取出这段时间内所有有数据的 ticker 列表
+  // 取当天成交量 Top N
   const tickers = db
     .prepare(
-      `SELECT DISTINCT ticker FROM daily_bars
-       WHERE date >= ? AND date <= ? AND close IS NOT NULL AND close > 0`
+      `SELECT ticker FROM daily_bars
+       WHERE date = ? AND volume IS NOT NULL AND volume > 0
+         AND close IS NOT NULL AND close > 0
+       ORDER BY volume DESC
+       LIMIT ?`
     )
-    .all(oldestDate, asOfDate)
+    .all(asOfDate, RS_TOP_N)
     .map((r) => r.ticker);
 
   if (tickers.length === 0) return [];
@@ -148,7 +149,13 @@ process.on("message", (msg) => {
     const db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
-    db.pragma("cache_size = -32000"); // 32MB cache（减少内存占用）
+    db.pragma("cache_size = -32000"); // 32MB cache
+
+    // 确保索引存在（加速 Top N 查询）
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_daily_bars_date_volume
+        ON daily_bars(date, volume DESC);
+    `);
 
     // 确定日期范围
     const minDate =
