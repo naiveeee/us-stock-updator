@@ -4,7 +4,14 @@
       <div class="rs-header">
         <h2>📊 RS Rating 排名</h2>
         <div class="rs-meta" v-if="data">
-          <span class="text-muted">{{ data.date }}</span>
+          <input
+            type="date"
+            v-model="selectedDate"
+            @change="onDateChange"
+            :max="latestDate"
+            :min="earliestDate"
+            class="date-picker"
+          />
           <span class="text-muted">· {{ data.total }} 只股票</span>
         </div>
       </div>
@@ -131,6 +138,14 @@ const backfillMsg = ref("");
 const backfillMsgType = ref("");
 const sectors = ref<{ name: string; count: number }[]>([]);
 const fetchingInfo = ref(false);
+const selectedDate = ref("");
+const latestDate = ref("");
+const earliestDate = ref("");
+
+function onDateChange() {
+  page.value = 1;
+  fetchData();
+}
 
 const totalPages = computed(() => {
   if (!data.value) return 1;
@@ -160,12 +175,18 @@ async function fetchData() {
       order: "desc",
       volume_top: volumeTop.value,
     };
+    if (selectedDate.value) params.date = selectedDate.value;
     if (minRating.value > 0) params.min_rating = minRating.value;
     if (searchInput.value.trim()) params.search = searchInput.value.trim();
     if (selectedSector.value) params.sector = selectedSector.value;
 
     data.value = await $fetch("/api/rs/ranking", { params });
     hasRS.value = !(data.value.message && data.value.message.includes("No RS data"));
+
+    // 首次加载：用返回的日期初始化日期选择器
+    if (!selectedDate.value && data.value.date) {
+      selectedDate.value = data.value.date;
+    }
   } catch (e: any) {
     console.error(e);
   }
@@ -281,6 +302,13 @@ function nextPage() {
 }
 
 onMounted(async () => {
+  // 获取日期范围
+  try {
+    const dates = await $fetch<any>("/api/rs/dates");
+    if (dates.earliest) earliestDate.value = dates.earliest;
+    if (dates.latest) latestDate.value = dates.latest;
+  } catch {}
+
   fetchData();
   fetchSectors();
   // 检查是否有正在运行的回填任务
@@ -304,7 +332,26 @@ onMounted(async () => {
   margin-bottom: 1rem;
 }
 .rs-header h2 { margin-bottom: 0; }
-.rs-meta { font-size: 0.8rem; }
+.rs-meta {
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.date-picker {
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #444;
+  background: #282b36;
+  color: #ddd;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.date-picker::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
 
 .filters {
   display: flex;

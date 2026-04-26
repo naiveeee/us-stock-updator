@@ -25,8 +25,8 @@ export default defineEventHandler((event) => {
   defaultFrom.setMonth(defaultFrom.getMonth() - 6);
   const from = (query.from as string) || defaultFrom.toISOString().slice(0, 10);
 
-  let limit = parseInt(query.limit as string) || 500;
-  limit = Math.min(Math.max(1, limit), 2000);
+  let limit = parseInt(query.limit as string) || 5000;
+  limit = Math.min(Math.max(1, limit), 10000);
 
   const rows = db
     .prepare(

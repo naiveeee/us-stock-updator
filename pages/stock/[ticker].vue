@@ -72,7 +72,7 @@ import { createChart, type IChartApi, type ISeriesApi, ColorType, LineStyle } fr
 const route = useRoute();
 const ticker = (route.params.ticker as string).toUpperCase();
 
-const range = ref("6m");
+const range = ref("all");
 const ranges = [
   { label: "1M", value: "1m" },
   { label: "3M", value: "3m" },
@@ -110,8 +110,8 @@ async function fetchAndRender() {
 
   // 并行拉数据
   const [priceData, rsData] = await Promise.all([
-    $fetch<any>("/api/stocks/daily", { params: { ticker, from, to, limit: 2000, sort: "asc" } }),
-    $fetch<any>("/api/rs/history", { params: { ticker, from, to, limit: 2000 } }),
+    $fetch<any>("/api/stocks/daily", { params: { ticker, from, to, limit: 5000, sort: "asc" } }),
+    $fetch<any>("/api/rs/history", { params: { ticker, from, to, limit: 5000 } }),
   ]);
 
   // 更新最新 RS
