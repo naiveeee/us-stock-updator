@@ -51,89 +51,80 @@ function getQuarterBounds(asOfDate: string): QuarterBounds[] {
 }
 
 /**
- * 计算单日全市场 RS Rating
+ * 计算单日全市场 RS Rating（内存优化版）
  *
- * 策略：一次性加载所需日期范围的所有 daily_bars 到内存，
- * 按 ticker 分组计算，避免逐只股票查询。
+ * 策略：用 SQL 逐 ticker 查询各季度边界的收盘价，
+ * 每只 ticker 只取 2×4=8 行数据，内存占用极低。
+ * 适合 3800 万行、24000+ ticker 的大数据库。
  */
 export function computeRSForDate(
   db: Database.Database,
   asOfDate: string
 ): RSResult[] {
   const quarters = getQuarterBounds(asOfDate);
-  const oldestDate = quarters[3].start; // Q1 start = 12 个月前
+  const oldestDate = quarters[3].start;
 
-  // 1. 一次性拉出所需日期范围的收盘价
-  //    对每只 ticker，取每个季度边界附近最近的收盘价
-  //    这里用一个更高效的方法：取所有日期的数据，在内存中计算
-  const rows = db
+  // 取出时间范围内所有有数据的 ticker
+  const tickers = db
     .prepare(
-      `SELECT ticker, date, close
-       FROM daily_bars
-       WHERE date >= ? AND date <= ? AND close IS NOT NULL AND close > 0
-       ORDER BY ticker, date`
+      `SELECT DISTINCT ticker FROM daily_bars
+       WHERE date >= ? AND date <= ? AND close IS NOT NULL AND close > 0`
     )
-    .all(oldestDate, asOfDate) as { ticker: string; date: string; close: number }[];
+    .all(oldestDate, asOfDate) as { ticker: string }[];
 
-  if (rows.length === 0) return [];
+  if (tickers.length === 0) return [];
 
-  // 2. 按 ticker 分组
-  const tickerData = new Map<string, { date: string; close: number }[]>();
-  for (const row of rows) {
-    let arr = tickerData.get(row.ticker);
-    if (!arr) {
-      arr = [];
-      tickerData.set(row.ticker, arr);
-    }
-    arr.push({ date: row.date, close: row.close });
-  }
+  // 准备 SQL：取某 ticker 在某日期范围内最早/最晚的收盘价
+  const stmtAfter = db.prepare(
+    `SELECT close FROM daily_bars
+     WHERE ticker = ? AND date >= ? AND date <= ? AND close IS NOT NULL AND close > 0
+     ORDER BY date ASC LIMIT 1`
+  );
+  const stmtBefore = db.prepare(
+    `SELECT close FROM daily_bars
+     WHERE ticker = ? AND date >= ? AND date <= ? AND close IS NOT NULL AND close > 0
+     ORDER BY date DESC LIMIT 1`
+  );
 
-  // 3. 对每只 ticker 计算加权得分
   const scores: { ticker: string; score: number }[] = [];
 
-  for (const [ticker, bars] of tickerData) {
-    // 需要至少横跨一定时间才有意义
-    if (bars.length < 20) continue;
-
-    // 找每个季度边界处最近的收盘价
-    const qReturns: number[] = []; // [Q4, Q3, Q2, Q1]
+  for (const { ticker } of tickers) {
+    const qReturns: number[] = [];
     let valid = true;
 
     for (const q of quarters) {
-      const startPrice = findClosestClose(bars, q.start, "after");
-      const endPrice = findClosestClose(bars, q.end, "before");
+      const startRow = stmtAfter.get(ticker, q.start, q.end) as { close: number } | undefined;
+      const endRow = stmtBefore.get(ticker, q.start, q.end) as { close: number } | undefined;
 
-      if (startPrice === null || endPrice === null || startPrice <= 0) {
+      if (!startRow || !endRow || startRow.close <= 0) {
         valid = false;
         break;
       }
 
-      qReturns.push((endPrice - startPrice) / startPrice * 100);
+      qReturns.push(((endRow.close - startRow.close) / startRow.close) * 100);
     }
 
     if (!valid || qReturns.length < 4) continue;
 
-    // Q4(最近)*0.4 + Q3*0.2 + Q2*0.2 + Q1(最远)*0.2
     const score =
-      qReturns[0] * 0.4 + // Q4
-      qReturns[1] * 0.2 + // Q3
-      qReturns[2] * 0.2 + // Q2
-      qReturns[3] * 0.2;  // Q1
+      qReturns[0] * 0.4 +
+      qReturns[1] * 0.2 +
+      qReturns[2] * 0.2 +
+      qReturns[3] * 0.2;
 
     scores.push({ ticker, score });
   }
 
   if (scores.length === 0) return [];
 
-  // 4. 排序 + 百分位排名
-  scores.sort((a, b) => a.score - b.score); // 升序，最差在前
+  scores.sort((a, b) => a.score - b.score);
   const n = scores.length;
 
   return scores.map((item, index) => {
-    // percentile: 该股票超过了多少比例的股票
-    const percentile = Math.round((index / (n - 1)) * 10000) / 100; // 0.00-100.00
-    // rating: 映射到 1-99
-    const rating = Math.max(1, Math.min(99, Math.round((index / (n - 1)) * 98) + 1));
+    const percentile = n > 1 ? Math.round((index / (n - 1)) * 10000) / 100 : 50;
+    const rating = n > 1
+      ? Math.max(1, Math.min(99, Math.round((index / (n - 1)) * 98) + 1))
+      : 50;
 
     return {
       ticker: item.ticker,
@@ -142,30 +133,6 @@ export function computeRSForDate(
       percentile,
     };
   });
-}
-
-/**
- * 在有序的 bars 中找最接近 targetDate 的收盘价
- * direction: "before" = 取 <= targetDate 的最近一条
- *            "after"  = 取 >= targetDate 的最近一条
- */
-function findClosestClose(
-  bars: { date: string; close: number }[],
-  targetDate: string,
-  direction: "before" | "after"
-): number | null {
-  if (direction === "before") {
-    // 从后往前找第一个 <= targetDate
-    for (let i = bars.length - 1; i >= 0; i--) {
-      if (bars[i].date <= targetDate) return bars[i].close;
-    }
-  } else {
-    // 从前往后找第一个 >= targetDate
-    for (let i = 0; i < bars.length; i++) {
-      if (bars[i].date >= targetDate) return bars[i].close;
-    }
-  }
-  return null;
 }
 
 /**

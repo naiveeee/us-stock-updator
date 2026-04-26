@@ -1,22 +1,16 @@
 /**
- * RS Backfill Worker — 独立进程
+ * RS Backfill Worker — 独立进程（内存优化版）
  *
  * 通过 child_process.fork() 从主进程启动，
  * 通过 IPC (process.send / process.on('message')) 与主进程通信。
  *
- * 启动参数通过 IPC 消息传入:
- *   { type: 'start', dbPath: string, startDate?: string, endDate?: string }
- *
- * 输出消息:
- *   { type: 'progress', date, index, total, count }
- *   { type: 'done', processed, durationMs }
- *   { type: 'error', message }
+ * 关键优化：每只 ticker 只查 5 个价格点（4 个季度边界），
+ * 不再一次性加载 12 个月全量 daily_bars 到内存。
  */
 
 const Database = require("better-sqlite3");
-const path = require("path");
 
-// ---- RS 计算逻辑（从 rs-rating.ts 移植，纯 JS 版本） ----
+// ---- RS 计算逻辑（SQL 优化版） ----
 
 function getQuarterBounds(asOfDate) {
   const d = new Date(asOfDate + "T00:00:00Z");
@@ -31,67 +25,74 @@ function getQuarterBounds(asOfDate) {
       end: endDate.toISOString().slice(0, 10),
     });
   }
-  return quarters;
+  return quarters; // [0]=Q4(最近), [3]=Q1(最远)
 }
 
-function findClosestClose(bars, targetDate, direction) {
-  if (direction === "before") {
-    for (let i = bars.length - 1; i >= 0; i--) {
-      if (bars[i].date <= targetDate) return bars[i].close;
-    }
-  } else {
-    for (let i = 0; i < bars.length; i++) {
-      if (bars[i].date >= targetDate) return bars[i].close;
-    }
-  }
-  return null;
-}
-
+/**
+ * 内存优化版：用 SQL 聚合每只 ticker 在各季度边界的价格，
+ * 而不是加载全量数据到 JS 内存。
+ *
+ * 策略：
+ *   对于每个季度，用 SQL 取每只 ticker 在 start 和 end 附近的收盘价，
+ *   然后在 JS 中计算收益率和加权得分。
+ */
 function computeRSForDate(db, asOfDate) {
   const quarters = getQuarterBounds(asOfDate);
   const oldestDate = quarters[3].start;
 
-  const rows = db
+  // 先取出这段时间内所有有数据的 ticker 列表
+  const tickers = db
     .prepare(
-      `SELECT ticker, date, close
-       FROM daily_bars
-       WHERE date >= ? AND date <= ? AND close IS NOT NULL AND close > 0
-       ORDER BY ticker, date`
+      `SELECT DISTINCT ticker FROM daily_bars
+       WHERE date >= ? AND date <= ? AND close IS NOT NULL AND close > 0`
     )
-    .all(oldestDate, asOfDate);
+    .all(oldestDate, asOfDate)
+    .map((r) => r.ticker);
 
-  if (rows.length === 0) return [];
+  if (tickers.length === 0) return [];
 
-  const tickerData = new Map();
-  for (const row of rows) {
-    let arr = tickerData.get(row.ticker);
-    if (!arr) {
-      arr = [];
-      tickerData.set(row.ticker, arr);
-    }
-    arr.push({ date: row.date, close: row.close });
-  }
+  // 准备查询语句：取某 ticker 在某日期之后/之前最近的收盘价
+  const stmtAfter = db.prepare(
+    `SELECT close FROM daily_bars
+     WHERE ticker = ? AND date >= ? AND date <= ? AND close IS NOT NULL AND close > 0
+     ORDER BY date ASC LIMIT 1`
+  );
+  const stmtBefore = db.prepare(
+    `SELECT close FROM daily_bars
+     WHERE ticker = ? AND date >= ? AND date <= ? AND close IS NOT NULL AND close > 0
+     ORDER BY date DESC LIMIT 1`
+  );
 
   const scores = [];
-  for (const [ticker, bars] of tickerData) {
-    if (bars.length < 20) continue;
+
+  for (const ticker of tickers) {
     const qReturns = [];
     let valid = true;
+
     for (const q of quarters) {
-      const startPrice = findClosestClose(bars, q.start, "after");
-      const endPrice = findClosestClose(bars, q.end, "before");
-      if (startPrice === null || endPrice === null || startPrice <= 0) {
+      // start price: >= q.start 且 <= q.end 的第一条
+      const startRow = stmtAfter.get(ticker, q.start, q.end);
+      // end price: <= q.end 且 >= q.start 的最后一条
+      const endRow = stmtBefore.get(ticker, q.start, q.end);
+
+      if (!startRow || !endRow || startRow.close <= 0) {
         valid = false;
         break;
       }
-      qReturns.push(((endPrice - startPrice) / startPrice) * 100);
+
+      qReturns.push(
+        ((endRow.close - startRow.close) / startRow.close) * 100
+      );
     }
+
     if (!valid || qReturns.length < 4) continue;
+
     const score =
       qReturns[0] * 0.4 +
       qReturns[1] * 0.2 +
       qReturns[2] * 0.2 +
       qReturns[3] * 0.2;
+
     scores.push({ ticker, score });
   }
 
@@ -101,11 +102,12 @@ function computeRSForDate(db, asOfDate) {
   const n = scores.length;
 
   return scores.map((item, index) => {
-    const percentile = Math.round((index / (n - 1)) * 10000) / 100;
-    const rating = Math.max(
-      1,
-      Math.min(99, Math.round((index / (n - 1)) * 98) + 1)
-    );
+    const percentile =
+      n > 1 ? Math.round((index / (n - 1)) * 10000) / 100 : 50;
+    const rating =
+      n > 1
+        ? Math.max(1, Math.min(99, Math.round((index / (n - 1)) * 98) + 1))
+        : 50;
     return {
       ticker: item.ticker,
       score: Math.round(item.score * 100) / 100,
@@ -146,7 +148,7 @@ process.on("message", (msg) => {
     const db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
-    db.pragma("cache_size = -64000");
+    db.pragma("cache_size = -32000"); // 32MB cache（减少内存占用）
 
     // 确定日期范围
     const minDate =
@@ -202,13 +204,22 @@ process.on("message", (msg) => {
 
     const pendingDays = tradingDays.filter((d) => !existingDates.has(d.date));
 
+    if (process.send) {
+      process.send({
+        type: "progress",
+        date: "",
+        index: 0,
+        total: pendingDays.length,
+        count: 0,
+      });
+    }
+
     let processed = 0;
     for (let i = 0; i < pendingDays.length; i++) {
       const dateStr = pendingDays[i].date;
       const count = computeAndSaveRS(db, dateStr);
       processed++;
 
-      // 每天都报告进度
       if (process.send) {
         process.send({
           type: "progress",
@@ -234,7 +245,6 @@ process.on("message", (msg) => {
   }
 });
 
-// 告诉主进程 worker 已准备好
 if (process.send) {
   process.send({ type: "ready" });
 }
