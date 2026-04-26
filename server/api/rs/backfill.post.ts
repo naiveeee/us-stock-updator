@@ -62,9 +62,9 @@ export default defineEventHandler(async (event) => {
   const startTime = Date.now();
 
   // 后台异步执行，不 await
-  Promise.resolve().then(() => {
+  Promise.resolve().then(async () => {
     try {
-      const processed = backfillRS(db, startDate, endDate, (date, index, total, count) => {
+      const processed = await backfillRS(db, startDate, endDate, (date, index, total, count) => {
         state.current = date;
         state.processed = index;
         state.total = total;

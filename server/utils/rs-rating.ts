@@ -197,16 +197,19 @@ export function computeAndSaveRS(
 /**
  * 批量回填历史 RS Rating
  * 从 startDate 到 endDate，逐个交易日计算
+ * 
+ * **异步版本**：每计算一天后通过 setImmediate 让出事件循环，
+ * 避免长时间阻塞 Node.js 导致其他请求无法响应。
  *
  * @param onProgress 进度回调
  * @returns 处理的天数
  */
-export function backfillRS(
+export async function backfillRS(
   db: Database.Database,
   startDate?: string,
   endDate?: string,
   onProgress?: (date: string, index: number, total: number, count: number) => void
-): number {
+): Promise<number> {
   // 确定可用的交易日列表
   const minDate = startDate || (() => {
     // 找到数据库中最早日期 + 12 个月（需要 12 个月历史才能算 RS）
@@ -253,12 +256,18 @@ export function backfillRS(
 
   const pendingDays = tradingDays.filter((d) => !existingDates.has(d.date));
 
+  // 工具函数：让出事件循环
+  const yieldLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
   let processed = 0;
   for (let i = 0; i < pendingDays.length; i++) {
     const dateStr = pendingDays[i].date;
     const count = computeAndSaveRS(db, dateStr);
     processed++;
     onProgress?.(dateStr, i + 1, pendingDays.length, count);
+
+    // 每计算一天后让出事件循环，让 HTTP 请求有机会被处理
+    await yieldLoop();
   }
 
   return processed;
