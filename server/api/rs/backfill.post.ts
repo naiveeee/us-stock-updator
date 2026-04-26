@@ -61,8 +61,8 @@ export default defineEventHandler(async (event) => {
   console.log(`[RS Backfill] 开始回填...`, { startDate, endDate });
   const startTime = Date.now();
 
-  // 后台异步执行，不 await
-  Promise.resolve().then(async () => {
+  // 后台异步执行，用 setTimeout 确保 response 先发出
+  setTimeout(async () => {
     try {
       const processed = await backfillRS(db, startDate, endDate, (date, index, total, count) => {
         state.current = date;
