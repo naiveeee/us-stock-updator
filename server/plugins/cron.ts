@@ -2,11 +2,13 @@
  * Cron 定时任务插件
  *
  * 每个工作日美东 17:00（收盘后 1 小时）自动执行：
- *   采集当天日线数据（Grouped Daily）
+ *   1. 采集当天日线数据（Grouped Daily）
+ *   2. 计算当天 RS Rating
  *
  * 控制逻辑：
  * - 每分钟检查一次是否到了触发时间
  * - 已执行过的日期跳过（幂等）
+ * - 采集失败后自动延迟 30 分钟重试一次
  * - 支持通过 CRON_DISABLED=true 环境变量关闭
  */
 import { getDb } from "../utils/db";
@@ -14,12 +16,15 @@ import { fetchGroupedDaily } from "../utils/massive";
 import { computeAndSaveRS } from "../utils/rs-rating";
 
 // ── 配置 ──
-const TARGET_HOUR_ET = 17; // 美东 17:00
+const TARGET_HOUR_ET = 17; // 美东 17:00（收盘后 1 小时）
 const TARGET_MINUTE_ET = 0;
 const CHECK_INTERVAL = 60_000; // 每分钟检查一次
+const RETRY_DELAY = 30 * 60_000; // 失败后 30 分钟重试
 
 // 记录已跑过的日期，避免重复
 const executedDates = new Set<string>();
+// 记录已重试过的日期，每天最多重试 1 次
+const retriedDates = new Set<string>();
 let cronTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -149,8 +154,11 @@ async function cronCheck() {
     const config = useRuntimeConfig();
     const apiKey = config.massiveApiKey;
 
+    console.log(`[Cron] API Key: ${apiKey ? apiKey.slice(0, 4) + '****' + apiKey.slice(-4) : '(空)'}`);
+
     if (!apiKey) {
-      console.error("[Cron] ❌ MASSIVE_API_KEY 未配置，跳过采集");
+      console.error("[Cron] ❌ MASSIVE_API_KEY 未配置！生产模式下需要通过系统环境变量注入，.env 文件不会被自动加载");
+      console.error("[Cron] 解决方式: pm2 的 ecosystem.config.js 里配置 env，或启动前 export MASSIVE_API_KEY=xxx");
       return;
     }
 
@@ -159,6 +167,36 @@ async function cronCheck() {
 
     if (count < 0) {
       console.error("[Cron] ❌ 采集失败");
+
+      // 自动重试：30 分钟后再试一次
+      if (!retriedDates.has(todayStr)) {
+        retriedDates.add(todayStr);
+        console.log(`[Cron] ⏳ 将在 ${RETRY_DELAY / 60000} 分钟后自动重试...`);
+        setTimeout(async () => {
+          console.log(`\n[Cron] 🔄 重试采集 ${todayStr}...`);
+          try {
+            // 先清除 error 状态，让 fetchToday 可以重新采集
+            const db = getDb();
+            db.prepare("DELETE FROM fetch_progress WHERE date = ? AND status = 'error'").run(todayStr);
+
+            const retryCount = await fetchToday(todayStr, apiKey);
+            if (retryCount >= 0) {
+              console.log(`[Cron] ✅ 重试成功: ${retryCount} 只股票`);
+              // 重试成功后也算 RS
+              try {
+                const rsCount = computeAndSaveRS(db, todayStr);
+                console.log(`[Cron] RS Rating 计算完成: ${rsCount} 只股票`);
+              } catch (e: any) {
+                console.error(`[Cron] RS Rating 计算失败: ${e?.message || e}`);
+              }
+            } else {
+              console.error(`[Cron] ❌ 重试仍然失败，需要手动处理`);
+            }
+          } catch (e: any) {
+            console.error(`[Cron] ❌ 重试异常: ${e?.message || e}`);
+          }
+        }, RETRY_DELAY);
+      }
       return;
     }
 
@@ -189,7 +227,7 @@ export default defineNitroPlugin((nitro) => {
     return;
   }
 
-  console.log(`[Cron] 定时任务已启动, 每工作日美东 ${TARGET_HOUR_ET}:00 自动采集数据并计算 RS Rating`);
+  console.log(`[Cron] 定时任务已启动, 每工作日美东 ${TARGET_HOUR_ET}:${String(TARGET_MINUTE_ET).padStart(2, '0')} 自动采集数据并计算 RS Rating`);
 
   // 启动定时检查
   cronTimer = setInterval(() => {
