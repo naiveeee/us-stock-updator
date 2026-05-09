@@ -2,8 +2,10 @@
  * Cron 定时任务插件
  *
  * 每个工作日美东 17:00（收盘后 1 小时）自动执行：
- *   1. 采集当天日线数据（Grouped Daily）
- *   2. 计算当天 RS Rating
+ *   1. 采集前一个工作日的日线数据（Grouped Daily）
+ *      注意：Polygon Free/Basic 计划不允许在当天收盘前请求当天数据，
+ *      因此改为采集"前一个工作日"确保数据已就绪。
+ *   2. 计算该日 RS Rating
  *
  * 控制逻辑：
  * - 每分钟检查一次是否到了触发时间
@@ -129,6 +131,18 @@ async function fetchToday(dateStr: string, apiKey: string): Promise<number> {
 }
 
 /**
+ * 获取前一个工作日日期（跳过周末）
+ */
+function getPreviousWeekday(from: Date): Date {
+  const d = new Date(from);
+  d.setDate(d.getDate() - 1);
+  while (!isWeekday(d)) {
+    d.setDate(d.getDate() - 1);
+  }
+  return d;
+}
+
+/**
  * 每分钟检查，到点就跑
  */
 async function cronCheck() {
@@ -148,10 +162,15 @@ async function cronCheck() {
   // 标记已执行（先标记防止重入）
   executedDates.add(todayStr);
 
+  // 采集前一个工作日的数据（Polygon Free/Basic 当天数据在收盘后仍需延迟才可用）
+  const targetDate = getPreviousWeekday(etNow);
+  const targetDateStr = formatDate(targetDate);
+
   const sysNow = new Date();
   console.log(`\n[Cron] ════════════════════════════════════════`);
   console.log(`[Cron] 自动任务触发: ${todayStr} ET ${TARGET_HOUR_ET}:00`);
-  console.log(`[Cron] 系统时间: ${sysNow.toISOString()} | 美东: ${etNow.toISOString ? etNow.toISOString() : etNow.toString()}`);
+  console.log(`[Cron] 采集目标日期: ${targetDateStr}（前一个工作日）`);
+  console.log(`[Cron] 系统时间: ${sysNow.toISOString()} | 美东: ${etNow.toLocaleString()}`);
   console.log(`[Cron] 进程已运行: ${Math.round((sysNow.getTime() - processStartTime) / 1000)}s`);
   console.log(`[Cron] ════════════════════════════════════════\n`);
 
@@ -160,7 +179,7 @@ async function cronCheck() {
     const apiKey = config.massiveApiKey;
 
     console.log(`[Cron] API Key: ${apiKey ? apiKey.slice(0, 4) + '****' + apiKey.slice(-4) : '(空)'}`);
-    console.log(`[Cron] 请求目标: https://api.massive.com/v2/aggs/grouped/.../stocks/${todayStr}`);
+    console.log(`[Cron] 请求目标: https://api.massive.com/v2/aggs/grouped/.../stocks/${targetDateStr}`);
 
     if (!apiKey) {
       console.error("[Cron] ❌ MASSIVE_API_KEY 未配置！生产模式下需要通过系统环境变量注入，.env 文件不会被自动加载");
@@ -168,29 +187,29 @@ async function cronCheck() {
       return;
     }
 
-    // 采集当天数据
-    const count = await fetchToday(todayStr, apiKey);
+    // 采集前一个工作日数据
+    const count = await fetchToday(targetDateStr, apiKey);
 
     if (count < 0) {
       console.error("[Cron] ❌ 采集失败");
 
       // 自动重试：30 分钟后再试一次
-      if (!retriedDates.has(todayStr)) {
-        retriedDates.add(todayStr);
+      if (!retriedDates.has(targetDateStr)) {
+        retriedDates.add(targetDateStr);
         console.log(`[Cron] ⏳ 将在 ${RETRY_DELAY / 60000} 分钟后自动重试...`);
         setTimeout(async () => {
-          console.log(`\n[Cron] 🔄 重试采集 ${todayStr}...`);
+          console.log(`\n[Cron] 🔄 重试采集 ${targetDateStr}...`);
           try {
             // 先清除 error 状态，让 fetchToday 可以重新采集
             const db = getDb();
-            db.prepare("DELETE FROM fetch_progress WHERE date = ? AND status = 'error'").run(todayStr);
+            db.prepare("DELETE FROM fetch_progress WHERE date = ? AND status = 'error'").run(targetDateStr);
 
-            const retryCount = await fetchToday(todayStr, apiKey);
+            const retryCount = await fetchToday(targetDateStr, apiKey);
             if (retryCount >= 0) {
               console.log(`[Cron] ✅ 重试成功: ${retryCount} 只股票`);
               // 重试成功后也算 RS
               try {
-                const rsCount = computeAndSaveRS(db, todayStr);
+                const rsCount = computeAndSaveRS(db, targetDateStr);
                 console.log(`[Cron] RS Rating 计算完成: ${rsCount} 只股票`);
               } catch (e: any) {
                 console.error(`[Cron] RS Rating 计算失败: ${e?.message || e}`);
@@ -208,11 +227,11 @@ async function cronCheck() {
 
     console.log(`[Cron] 采集完成: ${count} 只股票`);
 
-    // 计算当天 RS Rating
+    // 计算该日 RS Rating
     try {
       console.log("[Cron] 开始计算 RS Rating...");
       const db = getDb();
-      const rsCount = computeAndSaveRS(db, todayStr);
+      const rsCount = computeAndSaveRS(db, targetDateStr);
       console.log(`[Cron] RS Rating 计算完成: ${rsCount} 只股票`);
     } catch (err: any) {
       console.error(`[Cron] RS Rating 计算失败: ${err?.message || err}`);
@@ -312,9 +331,13 @@ export default defineNitroPlugin((nitro) => {
             } catch (e: any) {
               console.error(`[Cron] 补采 ${dateStr} RS 计算失败: ${e?.message || e}`);
             }
+          } else if (count < 0) {
+            // 采集失败（可能是 403），停止补采避免无效重试
+            console.error(`[Cron] 补采 ${dateStr} 失败，停止后续补采`);
+            break;
           }
-          // 每次请求间隔 2 秒，避免触发 rate limit
-          await new Promise((r) => setTimeout(r, 2000));
+          // 每次请求间隔 13 秒，与主采集引擎一致，避免触发 rate limit
+          await new Promise((r) => setTimeout(r, 13_000));
         }
         // 补采完成后刷新 dates 文件
         refreshRsDatesFile(db);
