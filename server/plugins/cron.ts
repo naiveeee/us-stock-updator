@@ -14,6 +14,7 @@
 import { getDb } from "../utils/db";
 import { fetchGroupedDaily } from "../utils/massive";
 import { computeAndSaveRS } from "../utils/rs-rating";
+import { refreshRsDatesFile } from "../utils/rs-dates-cache";
 
 // ── 配置 ──
 const TARGET_HOUR_ET = 17; // 美东 17:00（收盘后 1 小时）
@@ -26,6 +27,7 @@ const executedDates = new Set<string>();
 // 记录已重试过的日期，每天最多重试 1 次
 const retriedDates = new Set<string>();
 let cronTimer: ReturnType<typeof setInterval> | null = null;
+const processStartTime = Date.now();
 
 /**
  * 获取当前美东时间
@@ -146,8 +148,11 @@ async function cronCheck() {
   // 标记已执行（先标记防止重入）
   executedDates.add(todayStr);
 
+  const sysNow = new Date();
   console.log(`\n[Cron] ════════════════════════════════════════`);
   console.log(`[Cron] 自动任务触发: ${todayStr} ET ${TARGET_HOUR_ET}:00`);
+  console.log(`[Cron] 系统时间: ${sysNow.toISOString()} | 美东: ${etNow.toISOString ? etNow.toISOString() : etNow.toString()}`);
+  console.log(`[Cron] 进程已运行: ${Math.round((sysNow.getTime() - processStartTime) / 1000)}s`);
   console.log(`[Cron] ════════════════════════════════════════\n`);
 
   try {
@@ -155,6 +160,7 @@ async function cronCheck() {
     const apiKey = config.massiveApiKey;
 
     console.log(`[Cron] API Key: ${apiKey ? apiKey.slice(0, 4) + '****' + apiKey.slice(-4) : '(空)'}`);
+    console.log(`[Cron] 请求目标: https://api.massive.com/v2/aggs/grouped/.../stocks/${todayStr}`);
 
     if (!apiKey) {
       console.error("[Cron] ❌ MASSIVE_API_KEY 未配置！生产模式下需要通过系统环境变量注入，.env 文件不会被自动加载");
@@ -218,6 +224,34 @@ async function cronCheck() {
   }
 }
 
+// ── WAL Checkpoint ──
+// 防止 WAL 文件无限增长导致查询变慢/服务卡顿
+const WAL_CHECKPOINT_INTERVAL = 5 * 60_000; // 每 5 分钟执行一次
+let walTimer: ReturnType<typeof setInterval> | null = null;
+
+function walCheckpoint() {
+  try {
+    const db = getDb();
+    // 先尝试 TRUNCATE（最彻底，清空 WAL 文件）
+    // 如果 backfill worker 正在写，TRUNCATE 可能失败，退回 PASSIVE
+    let result = db.pragma("wal_checkpoint(TRUNCATE)") as any[];
+    let row = result?.[0];
+    if (row && row.busy === 1) {
+      // TRUNCATE 被阻塞，退回 PASSIVE 做部分 checkpoint
+      result = db.pragma("wal_checkpoint(PASSIVE)") as any[];
+      row = result?.[0];
+    }
+    if (row && (row.pages_to_checkpoint > 0 || row.checkpointed_pages > 0)) {
+      console.log(`[WAL] Checkpoint: ${row.checkpointed_pages}/${row.pages_to_checkpoint} pages`);
+    }
+    // checkpoint 后刷新 dates JSON 文件（此时 DB 读取快）
+    refreshRsDatesFile(db);
+  } catch (err: any) {
+    // 不影响主流程
+    console.error(`[WAL] Checkpoint 失败: ${err?.message || err}`);
+  }
+}
+
 // ── Nitro 插件入口 ──
 export default defineNitroPlugin((nitro) => {
   const disabled = process.env.CRON_DISABLED === "true";
@@ -229,6 +263,70 @@ export default defineNitroPlugin((nitro) => {
 
   console.log(`[Cron] 定时任务已启动, 每工作日美东 ${TARGET_HOUR_ET}:${String(TARGET_MINUTE_ET).padStart(2, '0')} 自动采集数据并计算 RS Rating`);
 
+  // 启动时立即生成 rs-dates.json（dates API 依赖此文件）
+  try {
+    const db = getDb();
+    refreshRsDatesFile(db);
+    console.log("[Cron] rs-dates.json 初始化完成");
+  } catch (e: any) {
+    console.error(`[Cron] rs-dates.json 初始化失败: ${e?.message || e}`);
+  }
+
+  // 启动时检查最近 5 个工作日是否有缺失数据，自动补采
+  setTimeout(async () => {
+    try {
+      const config = useRuntimeConfig();
+      const apiKey = config.massiveApiKey;
+      if (!apiKey) return;
+
+      const db = getDb();
+      const etNow = getETNow();
+      const missingDates: string[] = [];
+
+      // 往回检查最近 7 天（覆盖周末间隔）
+      for (let i = 1; i <= 7; i++) {
+        const d = new Date(etNow);
+        d.setDate(d.getDate() - i);
+        if (!isWeekday(d)) continue;
+        const dateStr = formatDate(d);
+        const existing = db
+          .prepare("SELECT status FROM fetch_progress WHERE date = ?")
+          .get(dateStr) as { status: string } | undefined;
+        if (!existing || existing.status === "error") {
+          missingDates.push(dateStr);
+        }
+      }
+
+      if (missingDates.length > 0) {
+        console.log(`[Cron] 发现 ${missingDates.length} 个工作日数据缺失: ${missingDates.join(", ")}`);
+        console.log("[Cron] 启动自动补采...");
+
+        for (const dateStr of missingDates.sort()) {
+          // 先清 error 状态
+          db.prepare("DELETE FROM fetch_progress WHERE date = ? AND status = 'error'").run(dateStr);
+          const count = await fetchToday(dateStr, apiKey);
+          if (count > 0) {
+            try {
+              const rsCount = computeAndSaveRS(db, dateStr);
+              console.log(`[Cron] 补采 ${dateStr}: RS ${rsCount} tickers`);
+            } catch (e: any) {
+              console.error(`[Cron] 补采 ${dateStr} RS 计算失败: ${e?.message || e}`);
+            }
+          }
+          // 每次请求间隔 2 秒，避免触发 rate limit
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+        // 补采完成后刷新 dates 文件
+        refreshRsDatesFile(db);
+        console.log("[Cron] 自动补采完成");
+      } else {
+        console.log("[Cron] 最近 7 天数据完整，无需补采");
+      }
+    } catch (e: any) {
+      console.error(`[Cron] 补采检查异常: ${e?.message || e}`);
+    }
+  }, 15_000); // 延迟 15 秒启动，等服务就绪
+
   // 启动定时检查
   cronTimer = setInterval(() => {
     cronCheck().catch((err) => {
@@ -236,12 +334,21 @@ export default defineNitroPlugin((nitro) => {
     });
   }, CHECK_INTERVAL);
 
+  // 启动 WAL checkpoint 定时器
+  walTimer = setInterval(walCheckpoint, WAL_CHECKPOINT_INTERVAL);
+  // 启动时也做一次
+  setTimeout(walCheckpoint, 10_000);
+
   // 服务关闭时清理
   nitro.hooks.hook("close", () => {
     if (cronTimer) {
       clearInterval(cronTimer);
       cronTimer = null;
-      console.log("[Cron] 定时任务已停止");
     }
+    if (walTimer) {
+      clearInterval(walTimer);
+      walTimer = null;
+    }
+    console.log("[Cron] 定时任务已停止");
   });
 });

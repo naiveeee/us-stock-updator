@@ -116,9 +116,22 @@
 
       <!-- 分页 -->
       <div v-if="data && data.total > pageSize" class="pagination">
-        <button @click="prevPage" :disabled="page <= 1" class="btn">◀ 上一页</button>
-        <span class="text-muted">{{ page }} / {{ totalPages }}</span>
-        <button @click="nextPage" :disabled="page >= totalPages" class="btn">下一页 ▶</button>
+        <button @click="goFirstPage" :disabled="page <= 1" class="btn btn-page">«</button>
+        <button @click="prevPage" :disabled="page <= 1" class="btn btn-page">‹</button>
+        <span class="page-input-wrap">
+          <input
+            v-model.number="pageInput"
+            @keyup.enter="goToPage"
+            @blur="goToPage"
+            type="number"
+            :min="1"
+            :max="totalPages"
+            class="page-input"
+          />
+          <span class="text-muted">/ {{ totalPages }}</span>
+        </span>
+        <button @click="nextPage" :disabled="page >= totalPages" class="btn btn-page">›</button>
+        <button @click="goLastPage" :disabled="page >= totalPages" class="btn btn-page">»</button>
       </div>
     </section>
   </div>
@@ -132,6 +145,7 @@ const sortBy = ref("rating");
 const volumeTop = ref(1000);
 const selectedSector = ref("");
 const page = ref(1);
+const pageInput = ref(1);
 const pageSize = 50;
 const hasRS = ref(true);
 const backfilling = ref(false);
@@ -144,6 +158,7 @@ const rsDates = ref<string[]>([]);
 
 function onDateChange() {
   page.value = 1;
+  pageInput.value = 1;
   fetchData();
 }
 
@@ -180,12 +195,14 @@ function debouncedFetch() {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     page.value = 1;
+    pageInput.value = 1;
     fetchData();
   }, 300);
 }
 
 function onSectorChange() {
   page.value = 1;
+  pageInput.value = 1;
   fetchData();
 }
 
@@ -318,10 +335,25 @@ function formatVolume(v: number | null) {
 }
 
 function prevPage() {
-  if (page.value > 1) { page.value--; fetchData(); }
+  if (page.value > 1) { page.value--; pageInput.value = page.value; fetchData(); }
 }
 function nextPage() {
-  if (page.value < totalPages.value) { page.value++; fetchData(); }
+  if (page.value < totalPages.value) { page.value++; pageInput.value = page.value; fetchData(); }
+}
+function goFirstPage() {
+  page.value = 1; pageInput.value = 1; fetchData();
+}
+function goLastPage() {
+  page.value = totalPages.value; pageInput.value = page.value; fetchData();
+}
+function goToPage() {
+  let target = pageInput.value;
+  if (typeof target !== "number" || isNaN(target)) { pageInput.value = page.value; return; }
+  target = Math.max(1, Math.min(target, totalPages.value));
+  if (target === page.value) { pageInput.value = target; return; }
+  page.value = target;
+  pageInput.value = target;
+  fetchData();
 }
 
 onMounted(async () => {
@@ -472,8 +504,40 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 1rem;
+  gap: 0.5rem;
   margin-top: 1rem;
+}
+.btn-page {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  border-radius: 6px;
+}
+.page-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.page-input {
+  width: 52px;
+  padding: 0.3rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid #444;
+  background: #282b36;
+  color: #ddd;
+  font-size: 0.85rem;
+  text-align: center;
+  font-family: inherit;
+  -moz-appearance: textfield;
+}
+.page-input::-webkit-outer-spin-button,
+.page-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .msg {

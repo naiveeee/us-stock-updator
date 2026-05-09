@@ -2,7 +2,7 @@
  * IBD RS Rating 计算引擎
  *
  * 算法：
- *   1. 取当天成交量 Top 1000 的股票
+ *   1. 取当天成交额 (close × volume) Top 1000 的股票
  *   2. 对每只取过去 12 个月分 4 个季度的涨跌幅
  *   3. 加权得分 = 0.2*Q1 + 0.2*Q2 + 0.2*Q3 + 0.4*Q4（近期权重更高）
  *   4. 在 Top 1000 内排名，映射到 1-99 rating + 精确 percentile
@@ -49,14 +49,14 @@ function getQuarterBounds(asOfDate: string): QuarterBounds[] {
   return quarters;
 }
 
-/** 只对当日成交量 Top N 的 ticker 计算 RS，过滤垃圾股 + 大幅提速 */
+/** 只对当日成交额 (close × volume) Top N 的 ticker 计算 RS，过滤垃圾股 + 大幅提速 */
 const RS_TOP_N = 1000;
 
 /**
- * 计算单日 RS Rating（成交量 Top 1000 版）
+ * 计算单日 RS Rating（成交额 Top 1000 版）
  *
  * 策略：
- *   1. 取当天成交量前 1000 的 ticker（走 idx_daily_bars_date_volume 索引）
+ *   1. 取当天成交额 (close × volume) 前 1000 的 ticker
  *   2. 逐 ticker 用 SQL 查各季度边界收盘价（走主键索引）
  *   3. 计算加权得分 → 排序 → 百分位排名
  */
@@ -66,13 +66,13 @@ export function computeRSForDate(
 ): RSResult[] {
   const quarters = getQuarterBounds(asOfDate);
 
-  // 取当天成交量最大的 Top N ticker
+  // 取当天成交额 (close × volume) 最大的 Top N ticker
   const tickers = db
     .prepare(
       `SELECT ticker FROM daily_bars
        WHERE date = ? AND volume IS NOT NULL AND volume > 0
          AND close IS NOT NULL AND close > 0
-       ORDER BY volume DESC
+       ORDER BY (close * volume) DESC
        LIMIT ?`
     )
     .all(asOfDate, RS_TOP_N) as { ticker: string }[];
@@ -91,13 +91,45 @@ export function computeRSForDate(
      ORDER BY date DESC LIMIT 1`
   );
 
+  // Ticker 复用检测：查该 ticker 在计算窗口内是否存在 >90 天的数据断裂
+  // 用窗口函数找相邻交易日的最大间隔，如果 >90 天说明中间有退市/重新上市
+  const GAP_THRESHOLD_DAYS = 90;
+  const stmtMaxGap = db.prepare(
+    `SELECT gap, gap_after FROM (
+       SELECT julianday(LEAD(date) OVER (ORDER BY date)) - julianday(date) AS gap,
+              LEAD(date) OVER (ORDER BY date) AS gap_after
+       FROM daily_bars
+       WHERE ticker = ? AND date >= ? AND date <= ?
+     )
+     WHERE gap > ?
+     ORDER BY gap DESC
+     LIMIT 1`
+  );
+
+  const oldestQuarterStart = quarters[3].start;
+
   const scores: { ticker: string; score: number }[] = [];
 
   for (const { ticker } of tickers) {
+    // 检查 12 个月窗口内是否有数据断裂（ticker 复用）
+    const gapRow = stmtMaxGap.get(ticker, oldestQuarterStart, asOfDate, GAP_THRESHOLD_DAYS) as { gap: number; gap_after: string } | undefined;
+
+    let validFrom: string | null = null;
+    if (gapRow && gapRow.gap > 0 && gapRow.gap_after) {
+      // 有断裂，只能用断裂之后的数据
+      validFrom = gapRow.gap_after;
+    }
+
     const qReturns: number[] = [];
     let valid = true;
 
     for (const q of quarters) {
+      // 如果该季度起点早于断裂恢复点，这个 ticker 数据不够
+      if (validFrom && q.start < validFrom) {
+        valid = false;
+        break;
+      }
+
       const startRow = stmtAfter.get(ticker, q.start, q.end) as { close: number } | undefined;
       const endRow = stmtBefore.get(ticker, q.start, q.end) as { close: number } | undefined;
 
