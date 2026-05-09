@@ -8,6 +8,7 @@
  */
 import { getDb } from "./db";
 import { fetchGroupedDaily } from "./massive";
+import { incrementDbStats } from "./db-stats";
 
 const RATE_LIMIT_DELAY = 13_000; // 13s between requests
 const HISTORY_YEARS = 2;
@@ -205,6 +206,11 @@ async function runFetchLoop(
         insertMany(rows, dateStr, rows.length);
         state.progress.success++;
         state.progress.totalStocks += rows.length;
+
+        // 增量更新数据库统计
+        try {
+          incrementDbStats(rows.length, dateStr);
+        } catch (_) {}
 
         console.log(
           `  [${i + 1}/${dates.length}] ${dateStr}: ${rows.length} stocks`

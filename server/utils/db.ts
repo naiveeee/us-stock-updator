@@ -95,6 +95,12 @@ export function getDb(): Database.Database {
       ON ticker_info(sector);
     CREATE INDEX IF NOT EXISTS idx_ticker_info_sic
       ON ticker_info(sic_code);
+
+    -- 预计算统计表（避免对千万级 daily_bars 做全表 COUNT）
+    CREATE TABLE IF NOT EXISTS db_stats (
+      key    TEXT PRIMARY KEY,
+      value  TEXT NOT NULL
+    );
   `);
 
   return _db;

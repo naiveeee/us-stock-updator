@@ -17,6 +17,7 @@ import { getDb } from "../utils/db";
 import { fetchGroupedDaily } from "../utils/massive";
 import { computeAndSaveRS } from "../utils/rs-rating";
 import { refreshRsDatesFile } from "../utils/rs-dates-cache";
+import { scheduleStatsRefresh, incrementDbStats } from "../utils/db-stats";
 
 // ── 配置 ──
 const TARGET_HOUR_ET = 17; // 美东 17:00（收盘后 1 小时）
@@ -119,6 +120,14 @@ async function fetchToday(dateStr: string, apiKey: string): Promise<number> {
 
     insertAll();
     console.log(`[Cron] ${dateStr}: 采集完成, ${results.length} 只股票`);
+
+    // 增量更新数据库统计
+    try {
+      incrementDbStats(results.length, dateStr);
+    } catch (e: any) {
+      console.error(`[Cron] 统计更新失败: ${e?.message || e}`);
+    }
+
     return results.length;
   } catch (err: any) {
     const msg = err?.message || String(err);
@@ -290,6 +299,9 @@ export default defineNitroPlugin((nitro) => {
   } catch (e: any) {
     console.error(`[Cron] rs-dates.json 初始化失败: ${e?.message || e}`);
   }
+
+  // 启动时后台刷新数据库统计（不阻塞请求）
+  scheduleStatsRefresh();
 
   // 启动时检查最近 5 个工作日是否有缺失数据，自动补采
   setTimeout(async () => {
