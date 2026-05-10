@@ -31,13 +31,32 @@
 
     <!-- K 线图 -->
     <section class="card chart-card">
-      <h2>📈 股价走势</h2>
+      <div class="chart-header">
+        <h2>📈 股价走势</h2>
+        <div v-if="tooltipData.visible" class="chart-tooltip">
+          <span class="tt-date">{{ tooltipData.date }}</span>
+          <span class="tt-item">O <b>{{ tooltipData.open }}</b></span>
+          <span class="tt-item">H <b>{{ tooltipData.high }}</b></span>
+          <span class="tt-item">L <b>{{ tooltipData.low }}</b></span>
+          <span class="tt-item">C <b>{{ tooltipData.close }}</b></span>
+          <span class="tt-item" :class="tooltipData.changeClass">{{ tooltipData.change }}</span>
+          <span class="tt-item tt-vol">Vol <b>{{ tooltipData.volume }}</b></span>
+        </div>
+      </div>
       <div ref="priceChartEl" class="chart-container"></div>
     </section>
 
     <!-- RS 曲线图 -->
     <section class="card chart-card">
-      <h2>💪 RS Rating 趋势</h2>
+      <div class="chart-header">
+        <h2>💪 RS Rating 趋势</h2>
+        <div v-if="rsTooltipData.visible" class="chart-tooltip">
+          <span class="tt-date">{{ rsTooltipData.date }}</span>
+          <span class="tt-item">RS <b :class="rsTooltipData.ratingClass">{{ rsTooltipData.rating }}</b></span>
+          <span class="tt-item">Pctl <b>{{ rsTooltipData.percentile }}</b></span>
+          <span class="tt-item">Score <b>{{ rsTooltipData.score }}</b></span>
+        </div>
+      </div>
       <div ref="rsChartEl" class="chart-container"></div>
     </section>
 
@@ -97,6 +116,74 @@ let isSyncingCrosshair = false;
 
 const latestRS = ref<any>(null);
 
+// ═══ Tooltip 数据 ═══
+const tooltipData = reactive({
+  visible: false,
+  date: "",
+  open: "",
+  high: "",
+  low: "",
+  close: "",
+  change: "",
+  changeClass: "",
+  volume: "",
+});
+
+const rsTooltipData = reactive({
+  visible: false,
+  date: "",
+  rating: "",
+  ratingClass: "",
+  percentile: "",
+  score: "",
+});
+
+// 用于 tooltip 查找的数据索引
+let priceDataMap = new Map<string, any>();
+let rsDataMap = new Map<string, any>();
+
+function formatVol(v: number): string {
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + "B";
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + "M";
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + "K";
+  return String(v);
+}
+
+function updateTooltip(dateStr: string) {
+  const bar = priceDataMap.get(dateStr);
+  if (bar) {
+    tooltipData.visible = true;
+    tooltipData.date = dateStr;
+    tooltipData.open = bar.open.toFixed(2);
+    tooltipData.high = bar.high.toFixed(2);
+    tooltipData.low = bar.low.toFixed(2);
+    tooltipData.close = bar.close.toFixed(2);
+    const pct = bar.open > 0 ? ((bar.close - bar.open) / bar.open * 100) : 0;
+    tooltipData.change = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
+    tooltipData.changeClass = pct >= 0 ? "tt-green" : "tt-red";
+    tooltipData.volume = formatVol(bar.volume);
+  } else {
+    tooltipData.visible = false;
+  }
+
+  const rs = rsDataMap.get(dateStr);
+  if (rs) {
+    rsTooltipData.visible = true;
+    rsTooltipData.date = dateStr;
+    rsTooltipData.rating = String(rs.rating);
+    rsTooltipData.ratingClass = rs.rating >= 90 ? "tt-hot" : rs.rating >= 80 ? "tt-warm" : "";
+    rsTooltipData.percentile = rs.percentile.toFixed(1) + "%";
+    rsTooltipData.score = rs.score?.toFixed(2) || "-";
+  } else {
+    rsTooltipData.visible = false;
+  }
+}
+
+function hideTooltips() {
+  tooltipData.visible = false;
+  rsTooltipData.visible = false;
+}
+
 function getFromDate(rangeVal: string): string {
   const now = new Date();
   switch (rangeVal) {
@@ -124,6 +211,16 @@ async function fetchAndRender() {
   // 更新最新 RS
   if (rsData.results.length > 0) {
     latestRS.value = rsData.results[rsData.results.length - 1];
+  }
+
+  // 构建 tooltip 数据索引
+  priceDataMap = new Map();
+  for (const b of priceData.results) {
+    priceDataMap.set(b.date, b);
+  }
+  rsDataMap = new Map();
+  for (const r of rsData.results) {
+    rsDataMap.set(r.date, r);
   }
 
   renderPriceChart(priceData.results);
@@ -200,14 +297,16 @@ function renderPriceChart(bars: any[]) {
 
   priceChart.timeScale().fitContent();
 
-  // crosshair 联动：price → RS
+  // crosshair 联动：price → RS + tooltip
   priceChart.subscribeCrosshairMove((param) => {
     if (isSyncingCrosshair || !rsChart) return;
     isSyncingCrosshair = true;
     if (param.time) {
       rsChart.setCrosshairPosition(NaN, param.time, rsLineSeries!);
+      updateTooltip(param.time as string);
     } else {
       rsChart.clearCrosshairPosition();
+      hideTooltips();
     }
     isSyncingCrosshair = false;
   });
@@ -335,14 +434,16 @@ function renderRSChart(rsRows: any[]) {
 
   rsChart.timeScale().fitContent();
 
-  // crosshair 联动：RS → price
+  // crosshair 联动：RS → price + tooltip
   rsChart.subscribeCrosshairMove((param) => {
     if (isSyncingCrosshair || !priceChart) return;
     isSyncingCrosshair = true;
     if (param.time) {
       priceChart.setCrosshairPosition(NaN, param.time, candleSeries!);
+      updateTooltip(param.time as string);
     } else {
       priceChart.clearCrosshairPosition();
+      hideTooltips();
     }
     isSyncingCrosshair = false;
   });
@@ -436,7 +537,38 @@ onUnmounted(() => {
   font-size: 0.8rem;
 }
 
-.chart-card h2 { margin-bottom: 0.8rem; }
+.chart-card h2 { margin-bottom: 0; }
+.chart-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+  flex-wrap: wrap;
+}
+.chart-header h2 { margin-bottom: 0; }
+
+.chart-tooltip {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.78rem;
+  color: #bbb;
+  font-variant-numeric: tabular-nums;
+}
+.tt-date {
+  color: #888;
+  margin-right: 0.2rem;
+}
+.tt-item b {
+  color: #fff;
+  font-weight: 600;
+}
+.tt-green b { color: #26a69a; }
+.tt-red b { color: #ef5350; }
+.tt-vol { color: #999; }
+.tt-hot { color: #ff5252; font-weight: 700; }
+.tt-warm { color: #ffc107; font-weight: 700; }
+
 .chart-container {
   width: 100%;
   border-radius: 8px;
