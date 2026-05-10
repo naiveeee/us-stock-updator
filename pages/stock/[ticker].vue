@@ -65,9 +65,12 @@
         <h2>💪 RS Rating 趋势</h2>
         <div v-if="rsTooltipData.visible" class="chart-tooltip">
           <span class="tt-date">{{ rsTooltipData.date }}</span>
-          <span class="tt-item">RS <b :class="rsTooltipData.ratingClass">{{ rsTooltipData.rating }}</b></span>
-          <span class="tt-item">Pctl <b>{{ rsTooltipData.percentile }}</b></span>
-          <span class="tt-item">Score <b>{{ rsTooltipData.score }}</b></span>
+          <template v-if="!rsTooltipData.noData">
+            <span class="tt-item">RS <b :class="rsTooltipData.ratingClass">{{ rsTooltipData.rating }}</b></span>
+            <span class="tt-item">Pctl <b>{{ rsTooltipData.percentile }}</b></span>
+            <span class="tt-item">Score <b>{{ rsTooltipData.score }}</b></span>
+          </template>
+          <span v-else class="tt-item tt-no-data">{{ rsTooltipData.noDataReason }}</span>
         </div>
       </div>
       <div ref="rsChartEl" class="chart-container"></div>
@@ -168,6 +171,8 @@ const rsTooltipData = reactive({
   ratingClass: "",
   percentile: "",
   score: "",
+  noData: false,
+  noDataReason: "",
 });
 
 // 用于 tooltip 查找的数据索引
@@ -201,11 +206,23 @@ function updateTooltip(dateStr: string) {
   const rs = rsDataMap.get(dateStr);
   if (rs) {
     rsTooltipData.visible = true;
+    rsTooltipData.noData = false;
     rsTooltipData.date = dateStr;
     rsTooltipData.rating = String(rs.rating);
     rsTooltipData.ratingClass = rs.rating >= 90 ? "tt-hot" : rs.rating >= 80 ? "tt-warm" : "";
     rsTooltipData.percentile = rs.percentile.toFixed(1) + "%";
     rsTooltipData.score = rs.score?.toFixed(2) || "-";
+    rsTooltipData.noDataReason = "";
+  } else if (priceDataMap.has(dateStr)) {
+    // 有价格数据但没有 RS — 显示原因
+    rsTooltipData.visible = true;
+    rsTooltipData.noData = true;
+    rsTooltipData.date = dateStr;
+    rsTooltipData.rating = "-";
+    rsTooltipData.ratingClass = "";
+    rsTooltipData.percentile = "-";
+    rsTooltipData.score = "-";
+    rsTooltipData.noDataReason = "RS 需上市满 12 个月数据";
   } else {
     rsTooltipData.visible = false;
   }
@@ -256,7 +273,7 @@ async function fetchAndRender() {
   }
 
   renderPriceChart(priceData.results);
-  renderRSChart(rsData.results);
+  renderRSChart(rsData.results, priceData.results);
 }
 
 function renderPriceChart(bars: any[]) {
@@ -352,7 +369,7 @@ function renderPriceChart(bars: any[]) {
   });
 }
 
-function renderRSChart(rsRows: any[]) {
+function renderRSChart(rsRows: any[], priceBars: any[]) {
   if (!rsChartEl.value) return;
 
   if (rsChart) {
@@ -381,11 +398,22 @@ function renderRSChart(rsRows: any[]) {
     },
   });
 
-  // 检测无数据月份间隙（连续超过 25 个日历天视为 gap）
+  // 检测无数据区间：包含头部/尾部缺失 + 中间断层
   const GAP_THRESHOLD = 25; // days
   interface GapRange { from: string; to: string }
   const gaps: GapRange[] = [];
 
+  // 头部 gap：价格数据起点早于 RS 数据起点
+  const priceFirst = priceBars.length > 0 ? priceBars[0].date : null;
+  const priceLast = priceBars.length > 0 ? priceBars[priceBars.length - 1].date : null;
+  const rsFirst = rsRows.length > 0 ? rsRows[0].date : null;
+  const rsLast = rsRows.length > 0 ? rsRows[rsRows.length - 1].date : null;
+
+  if (priceFirst && rsFirst && priceFirst < rsFirst) {
+    gaps.push({ from: priceFirst, to: rsFirst });
+  }
+
+  // 中间 gap：RS 数据内部断层
   for (let i = 1; i < rsRows.length; i++) {
     const prevDate = new Date(rsRows[i - 1].date);
     const currDate = new Date(rsRows[i].date);
@@ -395,11 +423,19 @@ function renderRSChart(rsRows: any[]) {
     }
   }
 
+  // 尾部 gap：价格数据终点晚于 RS 数据终点
+  if (priceLast && rsLast && priceLast > rsLast) {
+    const diffDays = (new Date(priceLast).getTime() - new Date(rsLast).getTime()) / (1000 * 60 * 60 * 24);
+    if (diffDays > 5) { // 超过5天才标记（避免周末误判）
+      gaps.push({ from: rsLast, to: priceLast });
+    }
+  }
+
   // 灰色背景 area series 标记 gap 区间
   if (gaps.length > 0) {
     const gapAreaSeries = rsChart.addAreaSeries({
-      topColor: "rgba(80, 80, 80, 0.15)",
-      bottomColor: "rgba(80, 80, 80, 0.15)",
+      topColor: "rgba(80, 80, 80, 0.2)",
+      bottomColor: "rgba(80, 80, 80, 0.05)",
       lineColor: "transparent",
       lineWidth: 0,
       priceScaleId: "gap-bg",
@@ -416,13 +452,10 @@ function renderRSChart(rsRows: any[]) {
     // 为每个 gap 生成 area 数据点（高值=100 覆盖全图）
     const gapData: { time: string; value: number }[] = [];
     for (const gap of gaps) {
-      // gap 起止点
       gapData.push({ time: gap.from, value: 0 });
-      // gap 开始后 1 天
       const fromNext = new Date(gap.from);
       fromNext.setDate(fromNext.getDate() + 1);
       gapData.push({ time: fromNext.toISOString().slice(0, 10), value: 100 });
-      // gap 结束前 1 天
       const toPrev = new Date(gap.to);
       toPrev.setDate(toPrev.getDate() - 1);
       if (toPrev > fromNext) {
@@ -457,10 +490,13 @@ function renderRSChart(rsRows: any[]) {
     lastValueVisible: false,
   });
 
-  if (rsRows.length >= 2) {
+  // 80 线覆盖整个价格数据范围
+  const timeStart = priceFirst || (rsRows.length > 0 ? rsRows[0].date : null);
+  const timeEnd = priceLast || (rsRows.length > 0 ? rsRows[rsRows.length - 1].date : null);
+  if (timeStart && timeEnd) {
     line80.setData([
-      { time: rsRows[0].date, value: 80 },
-      { time: rsRows[rsRows.length - 1].date, value: 80 },
+      { time: timeStart, value: 80 },
+      { time: timeEnd, value: 80 },
     ]);
   }
 
@@ -644,6 +680,7 @@ onUnmounted(() => {
 .tt-vol { color: #999; }
 .tt-hot { color: #ff5252; font-weight: 700; }
 .tt-warm { color: #ffc107; font-weight: 700; }
+.tt-no-data { color: #666; font-style: italic; font-size: 0.72rem; }
 
 .chart-container {
   width: 100%;
