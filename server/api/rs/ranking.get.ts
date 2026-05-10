@@ -10,7 +10,7 @@
  *   limit        - 返回条数 (可选，默认 100，最大 5000)
  *   offset       - 偏移量 (可选，默认 0)
  *   search       - ticker 前缀搜索 (可选)
- *   volume_top   - 只展示成交额前 N 名 (可选，默认 1000，不含 ETF/ETN)
+ *   volume_top   - 按月度池子排名筛选前 N 名 (可选，默认 1000，基于上月日均成交额)
  *   sector       - 板块过滤 (可选，如 "Technology")
  */
 export default defineEventHandler((event) => {
@@ -47,30 +47,30 @@ export default defineEventHandler((event) => {
   const order = (query.order as string) === "asc" ? "ASC" : "DESC";
 
   // 构建 SQL：rs_ratings JOIN daily_bars，可选 JOIN ticker_info
+  // 使用月度池子 (rs_pool) 排名进行筛选，与 RS 计算口径一致
+  const month = date.slice(0, 7); // "2026-05"
   let volumeFilterSql = "";
   const params: any[] = [date, date];
 
   if (volumeTop < 50000) {
     volumeFilterSql = `
       AND r.ticker IN (
-        SELECT db2.ticker FROM daily_bars db2
-        LEFT JOIN ticker_info ti3 ON db2.ticker = ti3.ticker
-        WHERE db2.date = ?
-          AND (ti3.ticker_type IS NULL OR ti3.ticker_type NOT IN ('ETF','ETN','ETV','ETS'))
-        ORDER BY (db2.close * db2.volume) DESC
+        SELECT p.ticker FROM rs_pool p
+        WHERE p.month = ?
+        ORDER BY p.avg_dollar_volume DESC
         LIMIT ?
       )
     `;
-    params.push(date, volumeTop);
+    params.push(month, volumeTop);
   }
 
   // 是否需要 JOIN ticker_info
   const needTickerInfo = !!sector;
 
+  // 始终 LEFT JOIN ticker_info 以返回 sector 字段；sector 过滤时改为 INNER JOIN
+  const tiJoinType = needTickerInfo ? "JOIN" : "LEFT JOIN";
   let joinClause = "JOIN daily_bars d ON r.ticker = d.ticker AND r.date = d.date";
-  if (needTickerInfo) {
-    joinClause += "\n    JOIN ticker_info ti ON r.ticker = ti.ticker";
-  }
+  joinClause += `\n    ${tiJoinType} ticker_info ti ON r.ticker = ti.ticker`;
 
   let whereClauses = "r.date = ? AND d.date = ?";
   whereClauses += volumeFilterSql;
@@ -97,15 +97,14 @@ export default defineEventHandler((event) => {
   `;
   const totalRow = db.prepare(countSql).get(...params) as { total: number };
 
-  // 数据（始终 LEFT JOIN ticker_info 以返回 sector 字段）
+  // 数据
   const dataSql = `
     SELECT r.ticker, r.date, r.score, r.rating, r.percentile,
            d.close, d.volume, d.open, d.high, d.low, d.vwap,
            CASE WHEN d.open > 0 THEN ROUND((d.close - d.open) / d.open * 100, 2) ELSE NULL END as change_pct,
-           ti2.sector, ti2.sic_description, ti2.name as company_name
+           ti.sector, ti.sic_description, ti.name as company_name
     FROM rs_ratings r
     ${joinClause}
-    LEFT JOIN ticker_info ti2 ON r.ticker = ti2.ticker
     WHERE ${whereClauses}
     ORDER BY ${sortBy} ${order} NULLS LAST
     LIMIT ? OFFSET ?

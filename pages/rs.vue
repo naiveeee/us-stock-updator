@@ -44,9 +44,8 @@
           <option value="change">按涨跌幅</option>
         </select>
         <select v-model="volumeTop" @change="fetchData" class="filter-select">
-          <option :value="500">成交额 Top 500 (不含 ETF)</option>
-          <option :value="1000">成交额 Top 1000 (不含 ETF)</option>
-          <option :value="3000">成交额 Top 3000 (不含 ETF)</option>
+          <option :value="500">月度池 Top 500</option>
+          <option :value="1000">月度池 Top 1000 (全池)</option>
           <option :value="50000">不限</option>
         </select>
         <button v-if="!hasRS" @click="runBackfill" :disabled="backfilling" class="btn btn-primary">
@@ -238,23 +237,6 @@ async function fetchSectors() {
     sectors.value = res.sectors || [];
   } catch {
     // ticker_info 表可能还没数据
-  }
-}
-
-async function fetchTickerInfo() {
-  fetchingInfo.value = true;
-  backfillMsg.value = "正在拉取 ticker 行业数据（约 20 分钟）...";
-  backfillMsgType.value = "msg-info";
-  try {
-    const res = await $fetch<any>("/api/ticker-info/fetch", { method: "POST" });
-    backfillMsg.value = res.message;
-    backfillMsgType.value = "msg-success";
-    await fetchSectors();
-  } catch (e: any) {
-    backfillMsg.value = e?.data?.message || e.message;
-    backfillMsgType.value = "msg-error";
-  } finally {
-    fetchingInfo.value = false;
   }
 }
 

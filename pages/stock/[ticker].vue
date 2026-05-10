@@ -4,7 +4,10 @@
     <section class="card stock-header">
       <div class="header-left">
         <button @click="navigateTo('/rs')" class="btn btn-back">← RS 排名</button>
-        <h1 class="ticker-title">{{ ticker }}</h1>
+        <h1 class="ticker-title">
+          {{ ticker }}
+          <span v-if="tickerInfo?.name" class="ticker-name">{{ tickerInfo.name }}</span>
+        </h1>
       </div>
       <div class="header-right" v-if="latestRS">
         <div class="rs-big" :class="rsBigClass">
@@ -12,6 +15,16 @@
           <div class="rs-value">{{ latestRS.rating }}</div>
           <div class="rs-pct">{{ latestRS.percentile.toFixed(1) }}%</div>
         </div>
+      </div>
+    </section>
+
+    <!-- 股票信息 -->
+    <section v-if="tickerInfo" class="card ticker-info-card">
+      <div class="info-tags">
+        <span v-if="tickerInfo.primary_exchange" class="info-tag tag-exchange">{{ exchangeLabel(tickerInfo.primary_exchange) }}</span>
+        <span v-if="tickerInfo.ticker_type" class="info-tag tag-type">{{ tickerInfo.ticker_type }}</span>
+        <span v-if="tickerInfo.sector" class="info-tag tag-sector">{{ tickerInfo.sector }}</span>
+        <span v-if="tickerInfo.sic_description" class="info-tag tag-sic">{{ tickerInfo.sic_description }}</span>
       </div>
     </section>
 
@@ -90,6 +103,25 @@ import { createChart, type IChartApi, type ISeriesApi, ColorType, LineStyle } fr
 
 const route = useRoute();
 const ticker = (route.params.ticker as string).toUpperCase();
+
+// ═══ Ticker 元数据 ═══
+const tickerInfo = ref<any>(null);
+
+const exchangeMap: Record<string, string> = {
+  XNAS: "NASDAQ",
+  XNYS: "NYSE",
+  ARCX: "NYSE Arca",
+  BATS: "CBOE BZX",
+  XASE: "NYSE American",
+};
+
+function exchangeLabel(code: string): string {
+  return exchangeMap[code] || code;
+}
+
+// 获取 ticker 信息
+const { data: tickerInfoData } = await useFetch(`/api/ticker-info/${ticker}`);
+if (tickerInfoData.value) tickerInfo.value = tickerInfoData.value;
 
 const range = ref("1y");
 const ranges = [
@@ -512,6 +544,50 @@ onUnmounted(() => {
   font-weight: 700;
   color: #fff;
   letter-spacing: 1px;
+}
+.ticker-name {
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: #aaa;
+  margin-left: 0.6rem;
+  letter-spacing: 0;
+}
+
+.ticker-info-card {
+  padding: 0.6rem 1rem;
+}
+.info-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.info-tag {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+.tag-exchange {
+  background: rgba(33, 150, 243, 0.15);
+  color: #64b5f6;
+  border: 1px solid rgba(33, 150, 243, 0.3);
+}
+.tag-type {
+  background: rgba(156, 39, 176, 0.15);
+  color: #ce93d8;
+  border: 1px solid rgba(156, 39, 176, 0.3);
+}
+.tag-sector {
+  background: rgba(76, 175, 80, 0.15);
+  color: #81c784;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+.tag-sic {
+  background: rgba(255, 152, 0, 0.15);
+  color: #ffb74d;
+  border: 1px solid rgba(255, 152, 0, 0.3);
 }
 
 .rs-big {

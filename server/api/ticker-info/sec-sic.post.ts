@@ -1,25 +1,11 @@
 import { getDb } from "~/server/utils/db";
+import { sicToSector } from "~/server/utils/sector-map";
 
 const SEC_USER_AGENT =
-  "us-stock-updator admin@example.com";
+  "us-stock-updator naiveeee@github.com";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-function sicToSector(sic: string): string {
-  const code = parseInt(sic, 10);
-  if (isNaN(code)) return "Unknown";
-  if (code < 1000) return "Agriculture";
-  if (code < 1500) return "Mining";
-  if (code < 1800) return "Construction";
-  if (code < 4000) return "Manufacturing";
-  if (code < 5000) return "Transportation & Utilities";
-  if (code < 5200) return "Wholesale Trade";
-  if (code < 6000) return "Retail Trade";
-  if (code < 6800) return "Finance & Insurance";
-  if (code < 9000) return "Services";
-  return "Public Administration";
 }
 
 /**

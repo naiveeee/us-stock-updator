@@ -9,47 +9,25 @@
  */
 import { fork, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
-
-// 回填状态（进程内单例）
-interface BackfillState {
-  running: boolean;
-  current: string;
-  processed: number;
-  total: number;
-  startedAt: string | null;
-  finishedAt: string | null;
-  error: string | null;
-  durationMs: number;
-}
-
-const state: BackfillState = {
-  running: false,
-  current: "",
-  processed: 0,
-  total: 0,
-  startedAt: null,
-  finishedAt: null,
-  error: null,
-  durationMs: 0,
-};
+import {
+  getBackfillState,
+  updateBackfillState,
+  resetBackfillState,
+} from "~/server/utils/backfill-state";
 
 let workerProcess: ChildProcess | null = null;
 
-export function getBackfillState(): BackfillState {
-  return { ...state };
-}
-
 export default defineEventHandler(async (event) => {
-  if (state.running) {
+  const currentState = getBackfillState();
+  if (currentState.running) {
     return {
       status: "already_running",
       message: "回填任务正在运行中",
-      ...state,
+      ...currentState,
     };
   }
 
   const body = await readBody(event).catch(() => ({}));
-  const db = getDb();
 
   const startDate = body?.startDate as string | undefined;
   const endDate = body?.endDate as string | undefined;
@@ -59,19 +37,12 @@ export default defineEventHandler(async (event) => {
   const dbPath = resolve(config.dbPath || "./data/stocks.db");
 
   // 重置状态
-  state.running = true;
-  state.current = "";
-  state.processed = 0;
-  state.total = 0;
-  state.startedAt = new Date().toISOString();
-  state.finishedAt = null;
-  state.error = null;
-  state.durationMs = 0;
+  const startedAt = new Date().toISOString();
+  resetBackfillState(startedAt);
 
   console.log(`[RS Backfill] 启动子进程回填...`, { startDate, endDate, dbPath });
 
   // 找到 worker 脚本路径（相对于项目根目录）
-  // 在 production 模式下，cwd 是项目根目录
   const workerPath = resolve(process.cwd(), "scripts/rs-backfill-worker.js");
 
   try {
@@ -89,49 +60,60 @@ export default defineEventHandler(async (event) => {
           endDate,
         });
       } else if (msg.type === "progress") {
-        state.current = msg.date;
-        state.processed = msg.index;
-        state.total = msg.total;
+        updateBackfillState({
+          current: msg.date,
+          processed: msg.index,
+          total: msg.total,
+        });
         if (msg.index % 10 === 0 || msg.index === msg.total) {
           console.log(
             `[RS Backfill] ${msg.index}/${msg.total} ${msg.date}: ${msg.count} tickers`
           );
         }
       } else if (msg.type === "done") {
-        state.durationMs = msg.durationMs;
-        state.processed = msg.processed;
-        state.finishedAt = new Date().toISOString();
-        state.running = false;
+        updateBackfillState({
+          durationMs: msg.durationMs,
+          processed: msg.processed,
+          finishedAt: new Date().toISOString(),
+          running: false,
+        });
         workerProcess = null;
         console.log(
           `[RS Backfill] 完成: ${msg.processed} 天, 耗时 ${(msg.durationMs / 1000).toFixed(1)}s`
         );
       } else if (msg.type === "error") {
-        state.error = msg.message;
-        state.durationMs = Date.now() - new Date(state.startedAt!).getTime();
-        state.finishedAt = new Date().toISOString();
-        state.running = false;
+        updateBackfillState({
+          error: msg.message,
+          durationMs: Date.now() - new Date(startedAt).getTime(),
+          finishedAt: new Date().toISOString(),
+          running: false,
+        });
         workerProcess = null;
         console.error(`[RS Backfill] 子进程错误: ${msg.message}`);
       }
     });
 
     workerProcess.on("error", (err) => {
-      state.error = err.message;
-      state.durationMs = Date.now() - new Date(state.startedAt!).getTime();
-      state.finishedAt = new Date().toISOString();
-      state.running = false;
+      updateBackfillState({
+        error: err.message,
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+        finishedAt: new Date().toISOString(),
+        running: false,
+      });
       workerProcess = null;
       console.error(`[RS Backfill] 子进程启动失败: ${err.message}`);
     });
 
     workerProcess.on("exit", (code) => {
-      if (state.running) {
+      const s = getBackfillState();
+      if (s.running) {
         // 非正常退出
-        state.error = `子进程异常退出，exit code: ${code}`;
-        state.durationMs = Date.now() - new Date(state.startedAt!).getTime();
-        state.finishedAt = new Date().toISOString();
-        state.running = false;
+        updateBackfillState({
+          error: `子进程异常退出，exit code: ${code}`,
+          durationMs: Date.now() - new Date(startedAt).getTime(),
+          finishedAt: new Date().toISOString(),
+          running: false,
+        });
         workerProcess = null;
         console.error(`[RS Backfill] 子进程异常退出: code=${code}`);
       }
@@ -145,12 +127,12 @@ export default defineEventHandler(async (event) => {
       process.stderr.write(`[RS Worker ERR] ${data}`);
     });
   } catch (err: any) {
-    state.error = err.message || String(err);
-    state.running = false;
-    console.error(`[RS Backfill] 启动子进程失败: ${state.error}`);
+    const errMsg = err.message || String(err);
+    updateBackfillState({ error: errMsg, running: false });
+    console.error(`[RS Backfill] 启动子进程失败: ${errMsg}`);
     return {
       status: "error",
-      message: state.error,
+      message: errMsg,
     };
   }
 
