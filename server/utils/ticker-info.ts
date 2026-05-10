@@ -55,18 +55,37 @@ async function fetchPolygonTickers(
       phase: "polygon",
       current: page,
       total: -1,
-      message: `Polygon: 拉取第 ${page} 页...`,
+      message: `Polygon: 拉取第 ${page} 页 (已有 ${allTickers.length} 只)...`,
     });
 
-    const resp = await $fetch<PolygonTickersResponse>(nextUrl, { timeout: 30_000 });
-    if (resp.results) {
-      allTickers.push(...resp.results);
+    let resp: PolygonTickersResponse;
+    const MAX_RETRIES = 3;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        resp = await $fetch<PolygonTickersResponse>(nextUrl, { timeout: 30_000 });
+        break;
+      } catch (err: any) {
+        const status = err?.statusCode || err?.status || "unknown";
+        const msg = err?.data?.message || err?.message || String(err);
+        console.error(`[TickerInfo] Polygon 第 ${page} 页请求失败 (attempt ${attempt}/${MAX_RETRIES}): [${status}] ${msg}`);
+        if (attempt === MAX_RETRIES) {
+          throw new Error(`Polygon API 失败: [${status}] ${msg} (URL: ${nextUrl.replace(/apiKey=[^&]+/, "apiKey=***")})`);
+        }
+        // 429 限流等久一点，其他错误短暂等待
+        const waitTime = status === 429 ? 60_000 : 15_000;
+        console.error(`[TickerInfo] 等待 ${waitTime / 1000}s 后重试...`);
+        await sleep(waitTime);
+      }
+    }
+
+    if (resp!.results) {
+      allTickers.push(...resp!.results);
     }
 
     // Polygon 的 next_url 不带 apiKey，需要自己加
-    if (resp.next_url) {
-      const sep = resp.next_url.includes("?") ? "&" : "?";
-      nextUrl = `${resp.next_url}${sep}apiKey=${apiKey}`;
+    if (resp!.next_url) {
+      const sep = resp!.next_url.includes("?") ? "&" : "?";
+      nextUrl = `${resp!.next_url}${sep}apiKey=${apiKey}`;
     } else {
       nextUrl = null;
     }
