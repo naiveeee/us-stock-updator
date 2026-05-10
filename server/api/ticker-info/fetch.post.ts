@@ -1,14 +1,10 @@
 /**
  * POST /api/ticker-info/fetch
- * 拉取 ticker 元数据（行业信息）
+ * 触发 ticker 元数据拉取（异步执行，立即返回）
  *
- * 两步走：
- *   1. Polygon Tickers List → 基础信息 (~2 min)
- *   2. SEC Submissions → SIC 行业代码 (~17 min)
- *
- * 返回进度和结果
+ * 使用 GET /api/ticker-info/status 查询进度
  */
-import { fetchAndSaveTickerInfo } from "../../utils/ticker-info";
+import { fetchAndSaveTickerInfo, getTickerInfoStatus } from "../../utils/ticker-info";
 
 export default defineEventHandler(async () => {
   const config = useRuntimeConfig();
@@ -21,35 +17,32 @@ export default defineEventHandler(async () => {
     });
   }
 
-  console.log("[TickerInfo] 开始拉取 ticker 元数据...");
-  console.log(`[TickerInfo] API Key: ${apiKey.slice(0, 6)}...${apiKey.slice(-4)}`);
-  const startTime = Date.now();
-
-  try {
-    const result = await fetchAndSaveTickerInfo(apiKey, (p) => {
-      console.log(`[TickerInfo] ${p.message}`);
-    });
-
-    const durationMs = Date.now() - startTime;
-    const msg = `完成: ${result.total} 只 ticker, ${result.withSic} 只有行业信息, 耗时 ${(durationMs / 1000 / 60).toFixed(1)} 分钟`;
-    console.log(`[TickerInfo] ${msg}`);
-
+  // 检查是否已在运行
+  const currentStatus = getTickerInfoStatus();
+  if (currentStatus.running) {
     return {
-      status: "done",
-      total: result.total,
-      withSic: result.withSic,
-      durationMs,
-      message: msg,
+      status: "already_running",
+      message: `任务已在运行中 (${currentStatus.phase}: ${currentStatus.message})`,
+      ...currentStatus,
     };
-  } catch (err: any) {
-    const durationMs = Date.now() - startTime;
-    const errMsg = err?.data?.message || err?.message || String(err);
-    const statusCode = err?.statusCode || err?.status || 500;
-    console.error(`[TickerInfo] ❌ 失败 (${(durationMs / 1000).toFixed(1)}s): [${statusCode}] ${errMsg}`);
-    console.error(`[TickerInfo] 完整错误:`, err);
-    throw createError({
-      statusCode: 500,
-      message: `TickerInfo 拉取失败: [${statusCode}] ${errMsg}`,
-    });
   }
+
+  // 异步触发，不等待完成
+  console.log("[TickerInfo] 收到拉取请求，开始异步执行...");
+  console.log(`[TickerInfo] API Key: ${apiKey.slice(0, 6)}...${apiKey.slice(-4)}`);
+
+  fetchAndSaveTickerInfo(apiKey, (p) => {
+    console.log(`[TickerInfo] ${p.message}`);
+  }).then((result) => {
+    const msg = `完成: ${result.total} 只 ticker, ${result.withSic} 只有行业信息`;
+    console.log(`[TickerInfo] ✅ ${msg}`);
+  }).catch((err) => {
+    const errMsg = err?.message || String(err);
+    console.error(`[TickerInfo] ❌ 失败: ${errMsg}`);
+  });
+
+  return {
+    status: "started",
+    message: "Ticker info 拉取任务已启动，使用 GET /api/ticker-info/status 查询进度",
+  };
 });

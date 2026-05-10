@@ -3,8 +3,9 @@
     <nav class="top-nav">
       <NuxtLink to="/" class="nav-brand">📈 US Stock Data</NuxtLink>
       <div class="nav-links">
-        <NuxtLink to="/" class="nav-link">🔄 数据管理</NuxtLink>
+        <NuxtLink to="/" class="nav-link">🔄 数据采集</NuxtLink>
         <NuxtLink to="/rs" class="nav-link">📊 RS 排名</NuxtLink>
+        <NuxtLink to="/admin" class="nav-link">🛠️ 数据管理</NuxtLink>
       </div>
     </nav>
     <main class="main-content">

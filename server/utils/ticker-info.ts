@@ -14,6 +14,44 @@ import { sicToSector } from "./sector-map";
 
 const SEC_USER_AGENT = "us-stock-updator gaozhao@tencent.com";
 
+// ═══════════════════════════════════════════════
+// 全局进度状态 & 并发锁
+// ═══════════════════════════════════════════════
+export interface TickerInfoTaskStatus {
+  running: boolean;
+  phase: "idle" | "polygon" | "sec" | "done" | "error";
+  message: string;
+  progress: { current: number; total: number };
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  result: { total: number; withSic: number } | null;
+}
+
+const _taskStatus: TickerInfoTaskStatus = {
+  running: false,
+  phase: "idle",
+  message: "",
+  progress: { current: 0, total: 0 },
+  startedAt: null,
+  finishedAt: null,
+  error: null,
+  result: null,
+};
+
+export function getTickerInfoStatus(): TickerInfoTaskStatus {
+  return { ..._taskStatus, progress: { ..._taskStatus.progress } };
+}
+
+function updateStatus(partial: Partial<TickerInfoTaskStatus>) {
+  Object.assign(_taskStatus, partial);
+}
+
+function updateProgress(current: number, total: number) {
+  _taskStatus.progress.current = current;
+  _taskStatus.progress.total = total;
+}
+
 interface TickerListItem {
   ticker: string;
   name?: string;
@@ -175,58 +213,106 @@ export async function fetchAndSaveTickerInfo(
   apiKey: string,
   onProgress?: (p: FetchTickerInfoProgress) => void
 ): Promise<{ total: number; withSic: number }> {
-  const db = getDb();
+  // ── 并发锁 ──
+  if (_taskStatus.running) {
+    throw new Error("Ticker info fetch 已在运行中，请等待完成");
+  }
 
-  // Step 1: Polygon Tickers List
-  const tickers = await fetchPolygonTickers(apiKey, onProgress);
-
-  // 先把 Polygon 的数据写入（没有 SIC 的也先存）
-  const upsert = db.prepare(`
-    INSERT OR REPLACE INTO ticker_info
-    (ticker, name, primary_exchange, ticker_type, cik, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-
-  const now = new Date().toISOString();
-  const cikMap = new Map<string, string>();
-
-  const insertBatch = db.transaction(() => {
-    for (const t of tickers) {
-      if (!t.ticker) continue;
-      upsert.run(t.ticker, t.name || null, t.primary_exchange || null, t.type || null, t.cik || null, now);
-      if (t.cik) {
-        cikMap.set(t.ticker, t.cik);
-      }
-    }
-  });
-  insertBatch();
-
-  onProgress?.({
+  updateStatus({
+    running: true,
     phase: "polygon",
-    current: tickers.length,
-    total: tickers.length,
-    message: `已写入 ${tickers.length} 只 ticker 基础信息, 其中 ${cikMap.size} 只有 CIK`,
+    message: "开始拉取 Polygon tickers...",
+    progress: { current: 0, total: 0 },
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    error: null,
+    result: null,
   });
 
-  // Step 2: SEC 查 SIC
-  const sicData = await fetchSECSicCodes(cikMap, onProgress);
+  try {
+    const db = getDb();
 
-  // 更新 SIC + sector
-  const updateSic = db.prepare(`
-    UPDATE ticker_info
-    SET sic_code = ?, sic_description = ?, sector = ?, updated_at = ?
-    WHERE ticker = ?
-  `);
+    // Step 1: Polygon Tickers List
+    const tickers = await fetchPolygonTickers(apiKey, (p) => {
+      updateStatus({ phase: "polygon", message: p.message });
+      updateProgress(p.current, p.total > 0 ? p.total : 0);
+      onProgress?.(p);
+    });
 
-  const updateBatch = db.transaction(() => {
-    for (const [ticker, info] of sicData) {
-      const sector = sicToSector(info.sic);
-      updateSic.run(info.sic, info.sicDesc, sector, now, ticker);
-    }
-  });
-  updateBatch();
+    // 先把 Polygon 的数据写入（没有 SIC 的也先存）
+    const upsert = db.prepare(`
+      INSERT OR REPLACE INTO ticker_info
+      (ticker, name, primary_exchange, ticker_type, cik, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
 
-  return { total: tickers.length, withSic: sicData.size };
+    const now = new Date().toISOString();
+    const cikMap = new Map<string, string>();
+
+    const insertBatch = db.transaction(() => {
+      for (const t of tickers) {
+        if (!t.ticker) continue;
+        upsert.run(t.ticker, t.name || null, t.primary_exchange || null, t.type || null, t.cik || null, now);
+        if (t.cik) {
+          cikMap.set(t.ticker, t.cik);
+        }
+      }
+    });
+    insertBatch();
+
+    const polygonDoneMsg = `已写入 ${tickers.length} 只 ticker 基础信息, 其中 ${cikMap.size} 只有 CIK`;
+    updateStatus({ message: polygonDoneMsg });
+    onProgress?.({
+      phase: "polygon",
+      current: tickers.length,
+      total: tickers.length,
+      message: polygonDoneMsg,
+    });
+
+    // Step 2: SEC 查 SIC
+    updateStatus({ phase: "sec", message: "开始查询 SEC SIC 代码..." });
+    const sicData = await fetchSECSicCodes(cikMap, (p) => {
+      updateStatus({ phase: "sec", message: p.message });
+      updateProgress(p.current, p.total);
+      onProgress?.(p);
+    });
+
+    // 更新 SIC + sector
+    const updateSic = db.prepare(`
+      UPDATE ticker_info
+      SET sic_code = ?, sic_description = ?, sector = ?, updated_at = ?
+      WHERE ticker = ?
+    `);
+
+    const updateBatch = db.transaction(() => {
+      for (const [ticker, info] of sicData) {
+        const sector = sicToSector(info.sic);
+        updateSic.run(info.sic, info.sicDesc, sector, now, ticker);
+      }
+    });
+    updateBatch();
+
+    const result = { total: tickers.length, withSic: sicData.size };
+    updateStatus({
+      running: false,
+      phase: "done",
+      message: `完成: ${result.total} 只 ticker, ${result.withSic} 只有行业信息`,
+      finishedAt: new Date().toISOString(),
+      result,
+    });
+
+    return result;
+  } catch (err: any) {
+    const errMsg = err?.message || String(err);
+    updateStatus({
+      running: false,
+      phase: "error",
+      message: `失败: ${errMsg}`,
+      finishedAt: new Date().toISOString(),
+      error: errMsg,
+    });
+    throw err;
+  }
 }
 
 function sleep(ms: number): Promise<void> {

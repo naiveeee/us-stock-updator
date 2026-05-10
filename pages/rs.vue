@@ -52,8 +52,8 @@
         <button v-if="!hasRS" @click="runBackfill" :disabled="backfilling" class="btn btn-primary">
           {{ backfilling ? '回填中...' : '⚡ 回填历史 RS' }}
         </button>
-        <button v-if="sectors.length === 0" @click="fetchTickerInfo" :disabled="fetchingInfo" class="btn btn-secondary">
-          {{ fetchingInfo ? '拉取中...' : '🏭 拉取行业数据' }}
+        <button v-if="sectors.length === 0" @click="navigateTo('/admin')" class="btn btn-secondary">
+          🏭 前往拉取行业数据
         </button>
       </div>
 
