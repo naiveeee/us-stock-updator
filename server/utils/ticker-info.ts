@@ -318,3 +318,168 @@ export async function fetchAndSaveTickerInfo(
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+// ═══════════════════════════════════════════════
+// 增量同步：为 daily_bars 中新出现的 ticker 补充 ticker_info
+// ═══════════════════════════════════════════════
+
+interface TickerDetail {
+  ticker: string;
+  name?: string;
+  primary_exchange?: string;
+  type?: string;
+  cik?: string;
+}
+
+/**
+ * 从 Polygon Ticker Details API 获取单个 ticker 信息
+ * https://api.polygon.io/v3/reference/tickers/{ticker}
+ */
+async function fetchSingleTickerDetail(
+  ticker: string,
+  apiKey: string
+): Promise<TickerDetail | null> {
+  try {
+    const url = `https://api.massive.com/v3/reference/tickers/${encodeURIComponent(ticker)}?apiKey=${apiKey}`;
+    const resp = await $fetch<{ results?: any }>(url, { timeout: 15_000 });
+    if (resp?.results) {
+      const r = resp.results;
+      return {
+        ticker: r.ticker,
+        name: r.name,
+        primary_exchange: r.primary_exchange,
+        type: r.type,
+        cik: r.cik,
+      };
+    }
+  } catch {
+    // 忽略单个失败（可能是退市或特殊 ticker）
+  }
+  return null;
+}
+
+/**
+ * 增量同步新 ticker 的信息
+ *
+ * 逻辑：
+ *   1. 查出 daily_bars 里有但 ticker_info 里没有的 ticker
+ *   2. 调 Polygon Ticker Details API 获取 type/name/exchange/cik
+ *   3. 对有 CIK 的调 SEC 获取 SIC
+ *   4. 写入 ticker_info 表
+ *
+ * @param apiKey - Polygon API key
+ * @param sinceDays - 只看最近 N 天的 daily_bars（默认 7 天，减少查询量）
+ * @returns 新同步的 ticker 数量
+ */
+export async function syncNewTickers(
+  apiKey: string,
+  sinceDays = 7
+): Promise<{ synced: number; withSic: number }> {
+  const db = getDb();
+
+  // 1. 找出缺失的 ticker
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - sinceDays);
+  const sinceDateStr = sinceDate.toISOString().slice(0, 10);
+
+  const missingTickers = db
+    .prepare(
+      `SELECT DISTINCT d.ticker
+       FROM daily_bars d
+       LEFT JOIN ticker_info t ON d.ticker = t.ticker
+       WHERE d.date >= ? AND t.ticker IS NULL`
+    )
+    .all(sinceDateStr) as { ticker: string }[];
+
+  if (missingTickers.length === 0) {
+    console.log("[SyncNewTickers] 没有新 ticker 需要同步");
+    return { synced: 0, withSic: 0 };
+  }
+
+  console.log(
+    `[SyncNewTickers] 发现 ${missingTickers.length} 只新 ticker，开始同步...`
+  );
+
+  // 2. 逐个调 Polygon Details API（限速 5 req/min for free tier）
+  const details: TickerDetail[] = [];
+  const BATCH_SIZE = 5;
+  const BATCH_DELAY = 13_000; // 13s 确保不超 5 calls/min
+
+  for (let i = 0; i < missingTickers.length; i += BATCH_SIZE) {
+    const batch = missingTickers.slice(i, i + BATCH_SIZE);
+    const promises = batch.map((row) =>
+      fetchSingleTickerDetail(row.ticker, apiKey)
+    );
+    const results = await Promise.all(promises);
+    for (const r of results) {
+      if (r) details.push(r);
+    }
+
+    // 频率控制（最后一批不等）
+    if (i + BATCH_SIZE < missingTickers.length) {
+      await sleep(BATCH_DELAY);
+    }
+  }
+
+  // 3. 写入基础信息
+  const upsert = db.prepare(`
+    INSERT OR REPLACE INTO ticker_info
+    (ticker, name, primary_exchange, ticker_type, cik, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `);
+
+  const now = new Date().toISOString();
+  const cikMap = new Map<string, string>();
+
+  const insertBatch = db.transaction(() => {
+    for (const d of details) {
+      upsert.run(
+        d.ticker,
+        d.name || null,
+        d.primary_exchange || null,
+        d.type || null,
+        d.cik || null,
+        now
+      );
+      if (d.cik) {
+        cikMap.set(d.ticker, d.cik);
+      }
+    }
+  });
+  insertBatch();
+
+  console.log(
+    `[SyncNewTickers] 已写入 ${details.length} 只 ticker 基础信息，${cikMap.size} 只有 CIK`
+  );
+
+  // 4. 对有 CIK 的查 SEC SIC
+  let withSic = 0;
+  if (cikMap.size > 0) {
+    const sicData = await fetchSECSicCodes(cikMap);
+
+    const updateSic = db.prepare(`
+      UPDATE ticker_info
+      SET sic_code = ?, sic_description = ?, sector = ?, updated_at = ?
+      WHERE ticker = ?
+    `);
+
+    const updateBatch = db.transaction(() => {
+      for (const [ticker, info] of sicData) {
+        const sector = sicToSector(info.sic);
+        updateSic.run(info.sic, info.sicDesc, sector, now, ticker);
+      }
+    });
+    updateBatch();
+
+    withSic = sicData.size;
+    console.log(
+      `[SyncNewTickers] SEC SIC 补充完成: ${withSic}/${cikMap.size} 成功`
+    );
+  }
+
+  console.log(
+    `[SyncNewTickers] 增量同步完成: ${details.length} 只 ticker, ${withSic} 只有行业信息`
+  );
+
+  return { synced: details.length, withSic };
+}

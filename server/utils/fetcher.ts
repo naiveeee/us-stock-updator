@@ -9,6 +9,7 @@
 import { getDb } from "./db";
 import { fetchGroupedDaily } from "./massive";
 import { incrementDbStats } from "./db-stats";
+import { syncNewTickers } from "./ticker-info";
 
 const RATE_LIMIT_DELAY = 13_000; // 13s between requests
 const HISTORY_YEARS = 2;
@@ -243,4 +244,19 @@ async function runFetchLoop(
   console.log(
     `🏁 采集完成: ${state.progress.success} 成功, ${state.progress.errors} 失败, ${state.progress.empty} 非交易日`
   );
+
+  // 采集完成后，增量同步新 ticker 的基本信息 + 行业数据
+  if (state.progress.success > 0) {
+    try {
+      console.log("[Fetcher] 开始增量同步新 ticker 信息...");
+      const syncResult = await syncNewTickers(apiKey, 7);
+      if (syncResult.synced > 0) {
+        console.log(
+          `[Fetcher] 增量同步完成: ${syncResult.synced} 只新 ticker, ${syncResult.withSic} 只有行业`
+        );
+      }
+    } catch (err: any) {
+      console.error("[Fetcher] 增量同步失败:", err?.message || err);
+    }
+  }
 }
