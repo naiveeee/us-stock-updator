@@ -164,8 +164,8 @@ export async function fetchAndSaveTickerInfo(
   // 先把 Polygon 的数据写入（没有 SIC 的也先存）
   const upsert = db.prepare(`
     INSERT OR REPLACE INTO ticker_info
-    (ticker, name, primary_exchange, cik, updated_at)
-    VALUES (?, ?, ?, ?, ?)
+    (ticker, name, primary_exchange, ticker_type, cik, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
   `);
 
   const now = new Date().toISOString();
@@ -174,7 +174,7 @@ export async function fetchAndSaveTickerInfo(
   const insertBatch = db.transaction(() => {
     for (const t of tickers) {
       if (!t.ticker) continue;
-      upsert.run(t.ticker, t.name || null, t.primary_exchange || null, t.cik || null, now);
+      upsert.run(t.ticker, t.name || null, t.primary_exchange || null, t.type || null, t.cik || null, now);
       if (t.cik) {
         cikMap.set(t.ticker, t.cik);
       }

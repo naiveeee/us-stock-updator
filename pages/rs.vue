@@ -44,9 +44,9 @@
           <option value="change">按涨跌幅</option>
         </select>
         <select v-model="volumeTop" @change="fetchData" class="filter-select">
-          <option :value="500">成交量 Top 500</option>
-          <option :value="1000">成交量 Top 1000</option>
-          <option :value="3000">成交量 Top 3000</option>
+          <option :value="500">成交额 Top 500 (不含 ETF)</option>
+          <option :value="1000">成交额 Top 1000 (不含 ETF)</option>
+          <option :value="3000">成交额 Top 3000 (不含 ETF)</option>
           <option :value="50000">不限</option>
         </select>
         <button v-if="!hasRS" @click="runBackfill" :disabled="backfilling" class="btn btn-primary">
@@ -142,7 +142,7 @@ const data = ref<any>(null);
 const searchInput = ref("");
 const minRating = ref(0);
 const sortBy = ref("rating");
-const volumeTop = ref(1000);
+const volumeTop = ref(500);
 const selectedSector = ref("");
 const page = ref(1);
 const pageInput = ref(1);

@@ -67,11 +67,12 @@ export function getDb(): Database.Database {
 
     -- RS Rating（IBD 相对强度评级）
     CREATE TABLE IF NOT EXISTS rs_ratings (
-      ticker       TEXT NOT NULL,
-      date         TEXT NOT NULL,
-      score        REAL,           -- 加权原始得分
-      rating       INTEGER,        -- 1-99 百分位排名（IBD 标准）
-      percentile   REAL,           -- 0.00-100.00 精确百分位
+      ticker              TEXT NOT NULL,
+      date                TEXT NOT NULL,
+      score               REAL,           -- 加权原始得分
+      rating              INTEGER,        -- 1-99 百分位排名（IBD 标准）
+      percentile          REAL,           -- 0.00-100.00 精确百分位
+      dollar_volume_rank  INTEGER,        -- 当日成交额全市场排名
       PRIMARY KEY (ticker, date)
     );
     CREATE INDEX IF NOT EXISTS idx_rs_ratings_date
@@ -84,6 +85,7 @@ export function getDb(): Database.Database {
       ticker            TEXT PRIMARY KEY,
       name              TEXT,              -- 公司名称
       primary_exchange  TEXT,              -- 交易所: XNAS / XNYS / ARCX ...
+      ticker_type       TEXT,              -- 类型: CS(普通股) / ETF / ETN / ADRC 等
       sic_code          TEXT,              -- SIC 行业代码 (4位)
       sic_description   TEXT,              -- SIC 行业描述
       sector            TEXT,              -- 板块大类（由 SIC 前 2 位映射）
@@ -95,6 +97,16 @@ export function getDb(): Database.Database {
       ON ticker_info(sector);
     CREATE INDEX IF NOT EXISTS idx_ticker_info_sic
       ON ticker_info(sic_code);
+    CREATE INDEX IF NOT EXISTS idx_ticker_info_type
+      ON ticker_info(ticker_type);
+
+    -- RS 月度计算池（每月初锁定上月平均成交额 Top 1000 的非 ETF 股票）
+    CREATE TABLE IF NOT EXISTS rs_pool (
+      month             TEXT NOT NULL,     -- '2026-05' 格式
+      ticker            TEXT NOT NULL,
+      avg_dollar_volume REAL,              -- 上月平均日成交额
+      PRIMARY KEY (month, ticker)
+    );
 
     -- 预计算统计表（避免对千万级 daily_bars 做全表 COUNT）
     CREATE TABLE IF NOT EXISTS db_stats (

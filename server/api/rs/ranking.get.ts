@@ -10,7 +10,7 @@
  *   limit        - 返回条数 (可选，默认 100，最大 5000)
  *   offset       - 偏移量 (可选，默认 0)
  *   search       - ticker 前缀搜索 (可选)
- *   volume_top   - 只展示成交量前 N 名 (可选，默认 1000)
+ *   volume_top   - 只展示成交额前 N 名 (可选，默认 1000，不含 ETF/ETN)
  *   sector       - 板块过滤 (可选，如 "Technology")
  */
 export default defineEventHandler((event) => {
@@ -53,9 +53,11 @@ export default defineEventHandler((event) => {
   if (volumeTop < 50000) {
     volumeFilterSql = `
       AND r.ticker IN (
-        SELECT ticker FROM daily_bars
-        WHERE date = ?
-        ORDER BY volume DESC
+        SELECT db2.ticker FROM daily_bars db2
+        LEFT JOIN ticker_info ti3 ON db2.ticker = ti3.ticker
+        WHERE db2.date = ?
+          AND (ti3.ticker_type IS NULL OR ti3.ticker_type NOT IN ('ETF','ETN','ETV','ETS'))
+        ORDER BY (db2.close * db2.volume) DESC
         LIMIT ?
       )
     `;

@@ -72,12 +72,14 @@ import { createChart, type IChartApi, type ISeriesApi, ColorType, LineStyle } fr
 const route = useRoute();
 const ticker = (route.params.ticker as string).toUpperCase();
 
-const range = ref("all");
+const range = ref("1y");
 const ranges = [
   { label: "1M", value: "1m" },
   { label: "3M", value: "3m" },
   { label: "6M", value: "6m" },
   { label: "1Y", value: "1y" },
+  { label: "2Y", value: "2y" },
+  { label: "5Y", value: "5y" },
   { label: "ALL", value: "all" },
 ];
 
@@ -90,6 +92,9 @@ let candleSeries: ISeriesApi<any> | null = null;
 let volumeSeries: ISeriesApi<any> | null = null;
 let rsLineSeries: ISeriesApi<any> | null = null;
 
+// crosshair 联动标志，防止递归
+let isSyncingCrosshair = false;
+
 const latestRS = ref<any>(null);
 
 function getFromDate(rangeVal: string): string {
@@ -99,6 +104,8 @@ function getFromDate(rangeVal: string): string {
     case "3m": now.setMonth(now.getMonth() - 3); break;
     case "6m": now.setMonth(now.getMonth() - 6); break;
     case "1y": now.setFullYear(now.getFullYear() - 1); break;
+    case "2y": now.setFullYear(now.getFullYear() - 2); break;
+    case "5y": now.setFullYear(now.getFullYear() - 5); break;
     case "all": return "2000-01-01";
   }
   return now.toISOString().slice(0, 10);
@@ -192,6 +199,26 @@ function renderPriceChart(bars: any[]) {
   );
 
   priceChart.timeScale().fitContent();
+
+  // crosshair 联动：price → RS
+  priceChart.subscribeCrosshairMove((param) => {
+    if (isSyncingCrosshair || !rsChart) return;
+    isSyncingCrosshair = true;
+    if (param.time) {
+      rsChart.setCrosshairPosition(NaN, param.time, rsLineSeries!);
+    } else {
+      rsChart.clearCrosshairPosition();
+    }
+    isSyncingCrosshair = false;
+  });
+
+  // timeScale 联动：price → RS
+  priceChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (isSyncingCrosshair || !rsChart || !range) return;
+    isSyncingCrosshair = true;
+    rsChart.timeScale().setVisibleLogicalRange(range);
+    isSyncingCrosshair = false;
+  });
 }
 
 function renderRSChart(rsRows: any[]) {
@@ -222,6 +249,58 @@ function renderRSChart(rsRows: any[]) {
       scaleMargins: { top: 0.05, bottom: 0.05 },
     },
   });
+
+  // 检测无数据月份间隙（连续超过 25 个日历天视为 gap）
+  const GAP_THRESHOLD = 25; // days
+  interface GapRange { from: string; to: string }
+  const gaps: GapRange[] = [];
+
+  for (let i = 1; i < rsRows.length; i++) {
+    const prevDate = new Date(rsRows[i - 1].date);
+    const currDate = new Date(rsRows[i].date);
+    const diffDays = (currDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24);
+    if (diffDays > GAP_THRESHOLD) {
+      gaps.push({ from: rsRows[i - 1].date, to: rsRows[i].date });
+    }
+  }
+
+  // 灰色背景 area series 标记 gap 区间
+  if (gaps.length > 0) {
+    const gapAreaSeries = rsChart.addAreaSeries({
+      topColor: "rgba(80, 80, 80, 0.15)",
+      bottomColor: "rgba(80, 80, 80, 0.15)",
+      lineColor: "transparent",
+      lineWidth: 0,
+      priceScaleId: "gap-bg",
+      crosshairMarkerVisible: false,
+      lastValueVisible: false,
+      priceLineVisible: false,
+    });
+
+    rsChart.priceScale("gap-bg").applyOptions({
+      scaleMargins: { top: 0, bottom: 0 },
+      visible: false,
+    });
+
+    // 为每个 gap 生成 area 数据点（高值=100 覆盖全图）
+    const gapData: { time: string; value: number }[] = [];
+    for (const gap of gaps) {
+      // gap 起止点
+      gapData.push({ time: gap.from, value: 0 });
+      // gap 开始后 1 天
+      const fromNext = new Date(gap.from);
+      fromNext.setDate(fromNext.getDate() + 1);
+      gapData.push({ time: fromNext.toISOString().slice(0, 10), value: 100 });
+      // gap 结束前 1 天
+      const toPrev = new Date(gap.to);
+      toPrev.setDate(toPrev.getDate() - 1);
+      if (toPrev > fromNext) {
+        gapData.push({ time: toPrev.toISOString().slice(0, 10), value: 100 });
+      }
+      gapData.push({ time: gap.to, value: 0 });
+    }
+    gapAreaSeries.setData(gapData);
+  }
 
   // RS Rating 线
   rsLineSeries = rsChart.addLineSeries({
@@ -255,6 +334,26 @@ function renderRSChart(rsRows: any[]) {
   }
 
   rsChart.timeScale().fitContent();
+
+  // crosshair 联动：RS → price
+  rsChart.subscribeCrosshairMove((param) => {
+    if (isSyncingCrosshair || !priceChart) return;
+    isSyncingCrosshair = true;
+    if (param.time) {
+      priceChart.setCrosshairPosition(NaN, param.time, candleSeries!);
+    } else {
+      priceChart.clearCrosshairPosition();
+    }
+    isSyncingCrosshair = false;
+  });
+
+  // timeScale 联动：RS → price
+  rsChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (isSyncingCrosshair || !priceChart || !range) return;
+    isSyncingCrosshair = true;
+    priceChart.timeScale().setVisibleLogicalRange(range);
+    isSyncingCrosshair = false;
+  });
 }
 
 function setRange(r: string) {
