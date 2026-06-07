@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>RS 强势池</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 0; min-height: 100vh; }
+  
+  /* Tab 导航 */
+  .tab-bar { display: flex; background: #111; border-bottom: 1px solid #222; padding: 0 20px; position: sticky; top: 0; z-index: 100; }
+  .tab-bar a { display: flex; align-items: center; gap: 6px; padding: 12px 20px; font-size: 14px; color: #888; text-decoration: none; border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; }
+  .tab-bar a:hover { color: #ccc; background: #1a1a1a; }
+  .tab-bar a.active { color: #4fc3f7; border-bottom-color: #4fc3f7; font-weight: 600; }
+  .tab-bar .tab-icon { font-size: 16px; }
+  
+  .content { padding: 20px; }
+
+  .header { display: flex; align-items: center; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+  .header h1 { font-size: 22px; color: #fff; white-space: nowrap; }
+  .header .stats { font-size: 14px; color: #888; }
+  .header .stats span { color: #4fc3f7; font-weight: 600; }
+  
+  .controls { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+  .control-group { display: flex; align-items: center; gap: 6px; background: #1a1a1a; border-radius: 6px; padding: 6px 12px; }
+  .control-group label { font-size: 12px; color: #888; white-space: nowrap; }
+  .control-group input { width: 50px; background: #111; border: 1px solid #333; border-radius: 4px; padding: 4px 6px; color: #fff; font-size: 13px; text-align: center; }
+  .control-group input:focus { outline: none; border-color: #4fc3f7; }
+  
+  .btn { background: #4fc3f7; color: #000; border: none; border-radius: 4px; padding: 6px 14px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+  .btn:hover { background: #81d4fa; }
+  .btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+  
+  .filter-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  .filter-bar input[type="text"] { background: #111; border: 1px solid #333; border-radius: 4px; padding: 6px 12px; color: #fff; font-size: 13px; width: 180px; }
+  .filter-bar input[type="text"]:focus { outline: none; border-color: #4fc3f7; }
+  .filter-bar select { background: #111; border: 1px solid #333; border-radius: 4px; padding: 6px 10px; color: #fff; font-size: 13px; }
+  .filter-bar .count { font-size: 13px; color: #888; margin-left: auto; }
+  .filter-bar .count span { color: #4fc3f7; font-weight: 600; }
+
+  .table-wrapper { overflow-x: auto; border-radius: 8px; background: #111; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead { position: sticky; top: 0; z-index: 2; }
+  th { background: #1a1a1a; color: #aaa; font-weight: 600; padding: 10px 12px; text-align: left; white-space: nowrap; border-bottom: 1px solid #333; cursor: pointer; user-select: none; }
+  th:hover { color: #4fc3f7; }
+  td { padding: 8px 12px; border-bottom: 1px solid #1a1a1a; white-space: nowrap; }
+  tr:hover td { background: #1a1a2a; }
+  
+  .ticker { font-weight: 700; color: #4fc3f7; cursor: pointer; text-decoration: none; }
+  .ticker:hover { color: #81d4fa; text-decoration: underline; }
+  .new-badge { font-size: 10px; background: rgba(76,175,80,0.2); color: #4caf50; padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
+  .old-badge { font-size: 10px; background: rgba(255,193,7,0.15); color: #ffc107; padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
+  
+  .rating-cell { font-weight: 600; }
+  .rating-high { color: #4caf50; }
+  .rating-mid { color: #ffc107; }
+  .rating-low { color: #ff5252; }
+  
+  .pct-pos { color: #ff5252; }
+  .pct-neg { color: #4caf50; }
+  
+  .days-bar { display: inline-block; height: 4px; border-radius: 2px; background: #4fc3f7; opacity: 0.6; vertical-align: middle; margin-left: 6px; }
+  
+  .loading { text-align: center; padding: 60px; color: #666; font-size: 14px; }
+  .error { text-align: center; padding: 60px; color: #ff5252; font-size: 14px; }
+  
+  .date-info { font-size: 12px; color: #666; }
+</style>
+</head>
+<body>
+
+<div class="tab-bar">
+  <a href="rs-pool.html" class="active"><span class="tab-icon">📊</span> RS 强势池</a>
+  <a href="crcl-analysis.html"><span class="tab-icon">📈</span> CRCL 分析</a>
+</div>
+
+<div class="content">
+
+<div class="header">
+  <h1>RS 强势池</h1>
+  <div class="stats">
+    截至 <span id="data-date">-</span> · 池内 <span id="pool-count">-</span> 只
+  </div>
+</div>
+
+<div class="controls">
+  <div class="control-group">
+    <label>入池天数 N</label>
+    <input type="number" id="param-n" value="10" min="1" max="30">
+  </div>
+  <div class="control-group">
+    <label>入池阈值 R1</label>
+    <input type="number" id="param-r1" value="95" min="50" max="99">
+  </div>
+  <div class="control-group">
+    <label>出池天数 M</label>
+    <input type="number" id="param-m" value="10" min="1" max="30">
+  </div>
+  <div class="control-group">
+    <label>出池阈值 R2</label>
+    <input type="number" id="param-r2" value="85" min="50" max="99">
+  </div>
+  <button class="btn" id="btn-refresh" onclick="fetchData()">刷新</button>
+</div>
+
+<div class="filter-bar">
+  <input type="text" id="search-input" placeholder="搜索 Ticker..." oninput="renderTable()">
+  <select id="sort-select" onchange="renderTable()">
+    <option value="days_asc">入池时间 新→旧</option>
+    <option value="days_desc">入池时间 旧→新</option>
+    <option value="rating_desc">Rating 高→低</option>
+    <option value="pct_desc">涨幅 高→低</option>
+    <option value="pct_asc">涨幅 低→高</option>
+    <option value="score_desc">得分 高→低</option>
+    <option value="turnover_desc">成交额 高→低</option>
+  </select>
+  <select id="rating-filter" onchange="renderTable()">
+    <option value="all">全部 Rating</option>
+    <option value="95">当前 ≥95</option>
+    <option value="90">当前 ≥90</option>
+    <option value="85">当前 ≥85</option>
+  </select>
+  <select id="turnover-filter" onchange="renderTable()">
+    <option value="0">全部成交额</option>
+    <option value="1e6">≥ $1M</option>
+    <option value="5e6">≥ $5M</option>
+    <option value="1e7">≥ $10M</option>
+    <option value="5e7">≥ $50M</option>
+    <option value="1e8">≥ $100M</option>
+    <option value="5e8">≥ $500M</option>
+    <option value="1e9">≥ $1B</option>
+  </select>
+  <div class="count">显示 <span id="display-count">-</span> 只</div>
+</div>
+
+<div class="table-wrapper">
+  <table id="pool-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Ticker</th>
+        <th>入池日</th>
+        <th>在池天数</th>
+        <th>当前 Rating</th>
+        <th>3M 涨幅</th>
+        <th>R²</th>
+        <th>得分</th>
+        <th>收盘价</th>
+        <th>日成交额</th>
+      </tr>
+    </thead>
+    <tbody id="pool-tbody">
+      <tr><td colspan="10" class="loading">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+</div>
+
+<script>
+const API_BASE = location.origin;
+let poolData = [];
+
+async function fetchData() {
+  const btn = document.getElementById('btn-refresh');
+  btn.disabled = true;
+  btn.textContent = '加载中...';
+  
+  const n = document.getElementById('param-n').value;
+  const m = document.getElementById('param-m').value;
+  const r1 = document.getElementById('param-r1').value;
+  const r2 = document.getElementById('param-r2').value;
+  
+  try {
+    const resp = await fetch(`${API_BASE}/api/rs/pool?n=${n}&m=${m}&r1=${r1}&r2=${r2}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    
+    poolData = data.results || [];
+    document.getElementById('data-date').textContent = data.date;
+    document.getElementById('pool-count').textContent = data.total;
+    
+    renderTable();
+  } catch (err) {
+    document.getElementById('pool-tbody').innerHTML = 
+      `<tr><td colspan="10" class="error">加载失败: ${err.message}</td></tr>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '刷新';
+  }
+}
+
+function renderTable() {
+  const search = document.getElementById('search-input').value.toUpperCase().trim();
+  const sortKey = document.getElementById('sort-select').value;
+  const ratingFilter = document.getElementById('rating-filter').value;
+  const turnoverMin = parseFloat(document.getElementById('turnover-filter').value) || 0;
+  
+  let filtered = poolData.filter(r => {
+    if (search && !r.ticker.includes(search)) return false;
+    if (ratingFilter !== 'all' && r.current_rating < parseInt(ratingFilter)) return false;
+    if (turnoverMin > 0 && r.turnover < turnoverMin) return false;
+    return true;
+  });
+  
+  // Sort
+  filtered.sort((a, b) => {
+    switch (sortKey) {
+      case 'days_asc': return a.days_in_pool - b.days_in_pool;
+      case 'days_desc': return b.days_in_pool - a.days_in_pool;
+      case 'rating_desc': return b.current_rating - a.current_rating;
+      case 'pct_desc': return b.pct_3m - a.pct_3m;
+      case 'pct_asc': return a.pct_3m - b.pct_3m;
+      case 'score_desc': return b.score - a.score;
+      case 'turnover_desc': return b.turnover - a.turnover;
+      default: return a.days_in_pool - b.days_in_pool;
+    }
+  });
+  
+  document.getElementById('display-count').textContent = filtered.length;
+  
+  const maxDays = Math.max(...poolData.map(r => r.days_in_pool), 1);
+  
+  const tbody = document.getElementById('pool-tbody');
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="10" class="loading">无匹配数据</td></tr>';
+    return;
+  }
+  
+  tbody.innerHTML = filtered.map((r, i) => {
+    const ratingClass = r.current_rating >= 95 ? 'rating-high' : r.current_rating >= 90 ? 'rating-mid' : 'rating-low';
+    const pctClass = r.pct_3m >= 0 ? 'pct-pos' : 'pct-neg';
+    const barWidth = Math.min(60, (r.days_in_pool / maxDays) * 60);
+    
+    let badge = '';
+    if (r.days_in_pool <= 15) badge = '<span class="new-badge">NEW</span>';
+    else if (r.days_in_pool >= 100) badge = '<span class="old-badge">STRONG</span>';
+    
+    const turnover = r.turnover >= 1e9 ? (r.turnover / 1e9).toFixed(1) + 'B' 
+                 : r.turnover >= 1e6 ? (r.turnover / 1e6).toFixed(1) + 'M'
+                 : r.turnover >= 1e3 ? (r.turnover / 1e3).toFixed(0) + 'K'
+                 : r.turnover.toFixed(0);
+    
+    return `<tr>
+      <td>${i + 1}</td>
+      <td><a class="ticker" href="stock-detail.html?ticker=${r.ticker}" target="_blank">${r.ticker}</a>${badge}</td>
+      <td class="date-info">${r.entry_date}</td>
+      <td>${r.days_in_pool}天<span class="days-bar" style="width:${barWidth}px"></span></td>
+      <td class="rating-cell ${ratingClass}">${r.current_rating}</td>
+      <td class="${pctClass}">${r.pct_3m >= 0 ? '+' : ''}${r.pct_3m.toFixed(1)}%</td>
+      <td>${r.r2.toFixed(3)}</td>
+      <td>${r.score.toFixed(1)}</td>
+      <td>$${r.close.toFixed(2)}</td>
+      <td>$${turnover}</td>
+    </tr>`;
+  }).join('');
+}
+
+// Init
+fetchData();
+</script>
+</body>
+</html>

@@ -1,25 +1,25 @@
 /**
- * RS Backfill Worker — 独立进程（月度池子版）
+ * RS Backfill Worker — EMA + R² 版
  *
- * 通过 child_process.fork() 从主进程启动，
- * 通过 IPC (process.send / process.on('message')) 与主进程通信。
- *
- * 关键改动：
- * 1. 每月初取上月平均成交额 Top 1000（排除 ETF/ETN）作为计算池
- * 2. 池子存入 rs_pool 表，当月每天只对池中 ticker 计算
- * 3. 新增 dollar_volume_rank 字段
+ * 算法:
+ *   1. 月度池子: 上月日均成交额 Top 2000 (排除 ETF/ETN)
+ *   2. 得分 = 原始涨幅(63天) × R² 系数
+ *     - 涨幅: (close_today - close_63天前) / close_63天前 × 100
+ *     - R² 系数: 0.5 + 0.5 × R²(63天收盘价线性回归)
+ *   3. 池内排名 → 1-99 rating + percentile
  */
 
 const Database = require("better-sqlite3");
 const { writeFileSync } = require("fs");
 const { resolve } = require("path");
 
-const RS_POOL_SIZE = 1000;
+const RS_POOL_SIZE = 2000;
 const EXCLUDED_TYPES = ["ETF", "ETN", "ETV", "ETS"];
+const PCT_WINDOW = 63; // 一个季度
+const R2_WINDOW = 63;
 
-/**
- * 将已完成的日期列表写入 JSON 文件（dates API 直接读取此文件）
- */
+// ---- 工具函数 ----
+
 function refreshRsDatesFile(db, dbPath) {
   try {
     const rows = db
@@ -29,11 +29,9 @@ function refreshRsDatesFile(db, dbPath) {
     const filePath = resolve(dbPath, "..", "rs-dates.json");
     writeFileSync(filePath, JSON.stringify({ dates, updatedAt: new Date().toISOString() }));
   } catch (e) {
-    // 非关键操作，失败不影响回填
+    // 非关键操作
   }
 }
-
-// ---- 月度池子逻辑 ----
 
 function getPrevMonth(month) {
   const [y, m] = month.split("-").map(Number);
@@ -44,6 +42,47 @@ function getPrevMonth(month) {
 function getMonth(date) {
   return date.slice(0, 7);
 }
+
+// ---- R² 线性回归 ----
+
+/**
+ * 计算 R²（决定系数）
+ * 对 prices 做 y = a + b*x 的线性回归，返回 R²
+ * @param {number[]} prices - 价格数组 (按时间正序)
+ * @returns {number} R² 值 [0, 1]
+ */
+function calcR2(prices) {
+  const n = prices.length;
+  if (n < 5) return 0;
+
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += i;
+    sumY += prices[i];
+    sumXY += i * prices[i];
+    sumX2 += i * i;
+  }
+
+  const meanY = sumY / n;
+  const denom = n * sumX2 - sumX * sumX;
+  if (denom === 0) return 0;
+
+  const b = (n * sumXY - sumX * sumY) / denom;
+  const a = (sumY - b * sumX) / n;
+
+  let ssRes = 0, ssTot = 0;
+  for (let i = 0; i < n; i++) {
+    const predicted = a + b * i;
+    ssRes += (prices[i] - predicted) ** 2;
+    ssTot += (prices[i] - meanY) ** 2;
+  }
+
+  if (ssTot === 0) return 0;
+  const r2 = 1 - ssRes / ssTot;
+  return Math.max(0, Math.min(1, r2));
+}
+
+// ---- 月度池子 ----
 
 function buildMonthlyPool(db, month) {
   const prevMonth = getPrevMonth(month);
@@ -81,40 +120,18 @@ function buildMonthlyPool(db, month) {
   return result.changes;
 }
 
-// ---- RS 计算逻辑 ----
+// ---- RS 核心计算 ----
 
-function getQuarterBounds(asOfDate) {
-  const d = new Date(asOfDate + "T00:00:00Z");
-  const quarters = [];
-  for (let i = 0; i < 4; i++) {
-    const endDate = new Date(d);
-    endDate.setUTCMonth(endDate.getUTCMonth() - i * 3);
-    const startDate = new Date(d);
-    startDate.setUTCMonth(startDate.getUTCMonth() - (i + 1) * 3);
-    quarters.push({
-      start: startDate.toISOString().slice(0, 10),
-      end: endDate.toISOString().slice(0, 10),
-    });
-  }
-  return quarters; // [0]=Q4(最近), [3]=Q1(最远)
-}
-
-/**
- * 计算单日 RS Rating — 月度池子版
- */
 function computeRSForDate(db, asOfDate, month) {
-  const quarters = getQuarterBounds(asOfDate);
-
-  // 从月度池取 ticker 列表
   const poolTickers = db
     .prepare("SELECT ticker FROM rs_pool WHERE month = ?")
     .all(month);
 
   if (poolTickers.length === 0) return [];
 
-  const tickerSet = new Set(poolTickers.map(t => t.ticker));
+  const tickerSet = new Set(poolTickers.map((t) => t.ticker));
 
-  // 查当天所有 ticker 的成交额排名
+  // 当天成交额排名
   const dayBars = db
     .prepare(
       `SELECT ticker, (close * volume) as dollar_vol
@@ -133,18 +150,20 @@ function computeRSForDate(db, asOfDate, month) {
     }
   }
 
-  // 准备查询语句
-  const stmtAfter = db.prepare(
-    `SELECT close FROM daily_bars
-     WHERE ticker = ? AND date >= ? AND date <= ? AND close IS NOT NULL AND close > 0
-     ORDER BY date ASC LIMIT 1`
-  );
-  const stmtBefore = db.prepare(
-    `SELECT close FROM daily_bars
-     WHERE ticker = ? AND date >= ? AND date <= ? AND close IS NOT NULL AND close > 0
-     ORDER BY date DESC LIMIT 1`
+  // 回溯日期：多取一些确保能取到 63 天前的收盘价
+  const lookbackDate = new Date(asOfDate + "T00:00:00Z");
+  lookbackDate.setUTCDate(lookbackDate.getUTCDate() - Math.ceil(PCT_WINDOW * 1.5));
+  const lookbackStr = lookbackDate.toISOString().slice(0, 10);
+
+  // 取价格序列
+  const stmtPrices = db.prepare(
+    `SELECT date, close FROM daily_bars
+     WHERE ticker = ? AND date >= ? AND date <= ?
+       AND close IS NOT NULL AND close > 0
+     ORDER BY date ASC`
   );
 
+  // ticker 复用检测
   const GAP_THRESHOLD_DAYS = 90;
   const stmtMaxGap = db.prepare(
     `SELECT gap, gap_after FROM (
@@ -158,56 +177,59 @@ function computeRSForDate(db, asOfDate, month) {
      LIMIT 1`
   );
 
-  const oldestQuarterStart = quarters[3].start;
-
   const scores = [];
 
   for (const { ticker } of poolTickers) {
-    // 当天没有交易数据的 ticker 跳过
     if (!dollarVolumeRankMap.has(ticker)) continue;
 
-    const gapRow = stmtMaxGap.get(ticker, oldestQuarterStart, asOfDate, GAP_THRESHOLD_DAYS);
+    const rows = stmtPrices.all(ticker, lookbackStr, asOfDate);
+    if (rows.length < 10) continue;
 
-    let validFrom = null;
+    // 检查数据断裂
+    const gapRow = stmtMaxGap.get(ticker, lookbackStr, asOfDate, GAP_THRESHOLD_DAYS);
+    let validRows = rows;
     if (gapRow && gapRow.gap > 0 && gapRow.gap_after) {
-      validFrom = gapRow.gap_after;
+      const gapIdx = rows.findIndex((r) => r.date >= gapRow.gap_after);
+      if (gapIdx > 0) {
+        validRows = rows.slice(gapIdx);
+      }
     }
 
-    const qReturns = [];
-    let valid = true;
+    if (validRows.length < 10) continue;
 
-    for (const q of quarters) {
-      if (validFrom && q.start < validFrom) {
-        valid = false;
-        break;
-      }
+    const prices = validRows.map((r) => r.close);
 
-      const startRow = stmtAfter.get(ticker, q.start, q.end);
-      const endRow = stmtBefore.get(ticker, q.start, q.end);
+    // 原始涨幅：首尾收盘价
+    const closeToday = prices[prices.length - 1];
+    const refIdx = Math.max(0, prices.length - 1 - PCT_WINDOW);
+    const closeRef = prices[refIdx];
 
-      if (!startRow || !endRow || startRow.close <= 0) {
-        valid = false;
-        break;
-      }
+    if (!closeRef || closeRef <= 0 || !closeToday || closeToday <= 0) continue;
 
-      qReturns.push(
-        ((endRow.close - startRow.close) / startRow.close) * 100
-      );
-    }
+    const pct = ((closeToday - closeRef) / closeRef) * 100;
 
-    if (!valid || qReturns.length < 4) continue;
+    // 计算 R²：用最近 R2_WINDOW 天的收盘价
+    const r2Prices = prices.slice(-R2_WINDOW);
+    const r2 = calcR2(r2Prices);
 
-    const score =
-      qReturns[0] * 0.4 +
-      qReturns[1] * 0.2 +
-      qReturns[2] * 0.2 +
-      qReturns[3] * 0.2;
+    // R² 系数: 0.5 + 0.5 * R²
+    const r2Factor = 0.5 + 0.5 * r2;
 
-    scores.push({ ticker, score, dollar_volume_rank: dollarVolumeRankMap.get(ticker) || 0 });
+    // 最终得分
+    const score = pct * r2Factor;
+
+    scores.push({
+      ticker,
+      score: Math.round(score * 100) / 100,
+      pct_3m: Math.round(pct * 100) / 100,
+      r2: Math.round(r2 * 10000) / 10000,
+      dollar_volume_rank: dollarVolumeRankMap.get(ticker) || 0,
+    });
   }
 
   if (scores.length === 0) return [];
 
+  // 排名
   scores.sort((a, b) => a.score - b.score);
   const n = scores.length;
 
@@ -219,11 +241,9 @@ function computeRSForDate(db, asOfDate, month) {
         ? Math.max(1, Math.min(99, Math.round((index / (n - 1)) * 98) + 1))
         : 50;
     return {
-      ticker: item.ticker,
-      score: Math.round(item.score * 100) / 100,
+      ...item,
       rating,
       percentile,
-      dollar_volume_rank: item.dollar_volume_rank,
     };
   });
 }
@@ -233,13 +253,18 @@ function computeAndSaveRS(db, asOfDate, month) {
   if (results.length === 0) return 0;
 
   const insert = db.prepare(`
-    INSERT OR REPLACE INTO rs_ratings (ticker, date, score, rating, percentile, dollar_volume_rank)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO rs_ratings (ticker, date, score, rating, percentile, dollar_volume_rank, pct_3m, pct_6m, pct_9m, pct_12m, r2)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertAll = db.transaction(() => {
     for (const r of results) {
-      insert.run(r.ticker, asOfDate, r.score, r.rating, r.percentile, r.dollar_volume_rank);
+      insert.run(
+        r.ticker, asOfDate, r.score, r.rating, r.percentile,
+        r.dollar_volume_rank, r.pct_3m,
+        0, 0, 0, // pct_6m, pct_9m, pct_12m 置 0（向后兼容）
+        r.r2
+      );
     }
   });
 
@@ -259,9 +284,9 @@ process.on("message", (msg) => {
     const db = new Database(dbPath);
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
-    db.pragma("cache_size = -32000"); // 32MB cache
+    db.pragma("cache_size = -32000");
 
-    // 确保索引和表存在
+    // 确保表和索引存在
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_daily_bars_date_volume
         ON daily_bars(date, volume DESC);
@@ -274,16 +299,21 @@ process.on("message", (msg) => {
       );
     `);
 
+    // 新增 r2 字段（如果不存在）
+    try {
+      db.exec("ALTER TABLE rs_ratings ADD COLUMN r2 REAL DEFAULT 0");
+    } catch (e) {
+      // 字段已存在，忽略
+    }
+
     // 确定日期范围
     const minDate =
       startDate ||
       (() => {
-        const row = db
-          .prepare("SELECT MIN(date) as d FROM daily_bars")
-          .get();
+        const row = db.prepare("SELECT MIN(date) as d FROM daily_bars").get();
         if (!row?.d) return null;
         const d = new Date(row.d + "T00:00:00Z");
-        d.setUTCMonth(d.getUTCMonth() + 12);
+        d.setUTCMonth(d.getUTCMonth() + 3);
         return d.toISOString().slice(0, 10);
       })();
 
@@ -296,9 +326,7 @@ process.on("message", (msg) => {
     const maxDate =
       endDate ||
       (() => {
-        const row = db
-          .prepare("SELECT MAX(date) as d FROM daily_bars")
-          .get();
+        const row = db.prepare("SELECT MAX(date) as d FROM daily_bars").get();
         return row?.d || null;
       })();
 
@@ -340,7 +368,6 @@ process.on("message", (msg) => {
       const dateStr = tradingDays[i].date;
       const month = getMonth(dateStr);
 
-      // 月份变化时构建新池子
       if (month !== currentMonth) {
         currentMonth = month;
         buildMonthlyPool(db, month);
@@ -362,9 +389,7 @@ process.on("message", (msg) => {
       if (processed % CHECKPOINT_EVERY === 0) {
         try {
           db.pragma("wal_checkpoint(TRUNCATE)");
-        } catch (e) {
-          // checkpoint 失败不阻塞流程
-        }
+        } catch (e) {}
       }
 
       if (processed % REFRESH_DATES_EVERY === 0) {
@@ -372,7 +397,6 @@ process.on("message", (msg) => {
       }
     }
 
-    // 完成后最终刷新一次
     refreshRsDatesFile(db, dbPath);
 
     db.close();

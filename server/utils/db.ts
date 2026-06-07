@@ -73,6 +73,10 @@ export function getDb(): Database.Database {
       rating              INTEGER,        -- 1-99 百分位排名（IBD 标准）
       percentile          REAL,           -- 0.00-100.00 精确百分位
       dollar_volume_rank  INTEGER,        -- 当日成交额全市场排名
+      pct_3m              REAL,           -- 近3个月涨幅(%)
+      pct_6m              REAL,           -- 近6个月涨幅(%)
+      pct_9m              REAL,           -- 近9个月涨幅(%)
+      pct_12m             REAL,           -- 近12个月涨幅(%)
       PRIMARY KEY (ticker, date)
     );
     CREATE INDEX IF NOT EXISTS idx_rs_ratings_date
@@ -100,7 +104,7 @@ export function getDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_ticker_info_type
       ON ticker_info(ticker_type);
 
-    -- RS 月度计算池（每月初锁定上月平均成交额 Top 1000 的非 ETF 股票）
+    -- RS 月度计算池（每月初锁定上月平均成交额 Top 2000 的非 ETF 股票）
     CREATE TABLE IF NOT EXISTS rs_pool (
       month             TEXT NOT NULL,     -- '2026-05' 格式
       ticker            TEXT NOT NULL,

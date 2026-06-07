@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>CRCL 走势分析</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 0; }
+  .tab-bar { display: flex; background: #111; border-bottom: 1px solid #222; padding: 0 20px; position: sticky; top: 0; z-index: 100; }
+  .tab-bar a { display: flex; align-items: center; gap: 6px; padding: 12px 20px; font-size: 14px; color: #888; text-decoration: none; border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; }
+  .tab-bar a:hover { color: #ccc; background: #1a1a1a; }
+  .tab-bar a.active { color: #4fc3f7; border-bottom-color: #4fc3f7; font-weight: 600; }
+  .tab-bar .tab-icon { font-size: 16px; }
+  .page-content { padding: 20px; }
+  h1 { font-size: 20px; margin-bottom: 16px; color: #fff; }
+  .chart-container { background: #111; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+  canvas { width: 100%; }
+  .analysis { background: #111; border-radius: 8px; padding: 20px; line-height: 1.8; }
+  .analysis h2 { color: #4fc3f7; font-size: 16px; margin: 16px 0 8px; }
+  .analysis h2:first-child { margin-top: 0; }
+  .phase { display: flex; align-items: flex-start; gap: 12px; margin: 8px 0; padding: 10px; border-radius: 6px; background: #1a1a1a; }
+  .phase-tag { font-size: 12px; padding: 2px 8px; border-radius: 4px; white-space: nowrap; font-weight: 600; }
+  .phase-red { background: rgba(255,82,82,0.2); color: #ff5252; }
+  .phase-green { background: rgba(76,175,80,0.2); color: #4caf50; }
+  .phase-yellow { background: rgba(255,193,7,0.2); color: #ffc107; }
+  .phase-blue { background: rgba(79,195,247,0.2); color: #4fc3f7; }
+  .highlight { color: #ffc107; font-weight: 600; }
+  .conclusion { background: #1a2332; border-left: 3px solid #4fc3f7; padding: 16px; border-radius: 0 6px 6px 0; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div class="tab-bar">
+  <a href="rs-pool.html"><span class="tab-icon">📊</span> RS 强势池</a>
+  <a href="crcl-analysis.html" class="active"><span class="tab-icon">📈</span> CRCL 分析</a>
+</div>
+<div class="page-content">
+<h1>CRCL 走势分析 (2026年)</h1>
+<div class="chart-container">
+  <canvas id="chart" height="400"></canvas>
+</div>
+<div class="analysis" id="analysis"></div>
+</div><!-- .page-content -->
+
+<script>
+const rawData = [
+  ["2026-01-02",80.84,84.58,79.62,83.47],["2026-01-05",84.575,88.06,84.1,84.8],["2026-01-06",86.0,86.2,81.95,84.85],
+  ["2026-01-07",83.19,83.6,80.53,80.59],["2026-01-08",79.9,82.72,78.85,81.79],["2026-01-09",82.2,84.33,79.45,82.9],
+  ["2026-01-12",81.14,83.12,79.85,82.9],["2026-01-13",83.24,84.28,80.29,83.46],["2026-01-14",84.99,88.46,81.75,84.8],
+  ["2026-01-15",83.47,83.79,76.11,76.6],["2026-01-16",76.74,80.02,75.58,78.61],["2026-01-20",75.7,77.47,72.62,72.7],
+  ["2026-01-21",72.9,74.59,70.42,72.64],["2026-01-22",73.55,73.81,70.76,71.35],["2026-01-23",70.86,72.55,69.88,71.33],
+  ["2026-01-26",70.01,72.43,69.85,70.9],["2026-01-27",70.38,70.54,67.5,69.96],["2026-01-28",72.86,77.0,71.91,72.84],
+  ["2026-01-29",70.31,70.6,65.75,67.55],["2026-01-30",66.6,66.91,61.88,63.93],
+  ["2026-02-02",61.5,61.87,58.41,58.86],["2026-02-03",60.17,60.17,53.76,56.16],["2026-02-04",56.19,56.29,51.52,55.05],
+  ["2026-02-05",53.63,54.48,49.9,50.23],["2026-02-06",53.81,57.8,53.62,57.04],["2026-02-09",56.33,60.88,55.76,60.1],
+  ["2026-02-10",58.54,62.0,58.3,59.75],["2026-02-11",59.11,59.17,55.89,57.86],["2026-02-12",58.75,58.75,55.31,56.63],
+  ["2026-02-13",58.44,62.2,57.23,60.04],["2026-02-17",59.27,62.9,57.02,61.62],["2026-02-18",62.13,64.7,61.2,63.15],
+  ["2026-02-19",62.27,62.85,59.8,61.92],["2026-02-20",62.25,65.5,61.5,63.02],["2026-02-23",62.1,63.13,59.83,61.17],
+  ["2026-02-24",60.39,62.95,59.46,61.37],
+  ["2026-02-25",73.77,83.35,71.19,83.14],["2026-02-26",81.57,90.6,81.23,87.21],["2026-02-27",83.62,84.98,80.97,83.44],
+  ["2026-03-02",80.8,96.61,80.23,96.14],["2026-03-03",91.5,104.3,91.13,99.63],["2026-03-04",102.8,106.35,101.4,105.27],
+  ["2026-03-05",105.27,110.12,103.3,105.74],["2026-03-06",102.82,106.29,100.07,101.91],
+  ["2026-03-09",105.21,112.66,104.9,111.84],["2026-03-10",113.44,121.8,112.8,118.09],
+  ["2026-03-11",119.8,123.4,111.72,112.81],["2026-03-12",113.05,117.78,112.15,114.18],
+  ["2026-03-13",118.34,119.3,113.16,115.38],["2026-03-16",120.15,126.5,119.77,125.83],
+  ["2026-03-17",124.01,136.65,122.74,132.31],["2026-03-18",131.49,135.49,128.0,132.84],
+  ["2026-03-19",126.33,129.74,121.41,128.33],["2026-03-20",127.98,132.38,122.91,126.03],
+  ["2026-03-23",124.15,127.48,121.32,126.64],["2026-03-24",126.35,127.08,98.31,101.17],
+  ["2026-03-25",106.77,110.25,101.6,103.86],["2026-03-26",101.91,103.55,97.31,98.27],
+  ["2026-03-27",97.74,97.78,90.85,93.66],["2026-03-30",96.26,96.5,88.27,89.91],
+  ["2026-03-31",91.25,97.8,89.4,95.41],
+  ["2026-04-01",98.42,99.46,90.26,90.74],["2026-04-02",87.45,90.39,84.27,90.26],
+  ["2026-04-06",93.09,94.7,91.02,92.15],["2026-04-07",90.97,95.28,88.0,94.12],
+  ["2026-04-08",101.29,101.82,93.0,94.44],["2026-04-09",93.06,93.95,84.6,85.1],
+  ["2026-04-10",88.05,90.33,84.91,88.04],["2026-04-13",86.34,98.68,86.27,98.68],
+  ["2026-04-14",102.26,110.51,101.41,105.49],["2026-04-15",107.58,108.7,102.93,105.52],
+  ["2026-04-16",107.0,108.04,101.7,107.46],["2026-04-17",110.37,111.2,102.7,105.91],
+  ["2026-04-20",102.48,106.5,98.5,106.36],["2026-04-21",104.73,105.1,95.79,96.02],
+  ["2026-04-22",99.95,105.79,99.38,104.36],["2026-04-23",101.22,103.65,97.9,100.01],
+  ["2026-04-24",102.27,103.0,97.56,99.66],["2026-04-27",98.56,98.8,94.29,95.44],
+  ["2026-04-28",92.5,95.39,92.26,94.35],["2026-04-29",93.55,96.27,90.19,95.56],
+  ["2026-04-30",95.29,95.29,89.9,90.88],
+  ["2026-05-01",92.77,100.01,92.21,99.7],["2026-05-04",107.13,119.99,106.9,119.53],
+  ["2026-05-05",121.4,121.4,112.45,114.19],["2026-05-06",115.0,122.86,113.2,121.8],
+  ["2026-05-07",118.26,120.48,109.6,113.25],["2026-05-08",114.26,115.0,108.91,113.67],
+  ["2026-05-11",118.85,134.8,105.36,131.76],["2026-05-12",129.99,140.0,120.5,123.65],
+];
+
+const dates = rawData.map(d => d[0]);
+const opens = rawData.map(d => d[1]);
+const highs = rawData.map(d => d[2]);
+const lows = rawData.map(d => d[3]);
+const closes = rawData.map(d => d[4]);
+
+// RS data
+const rsData = {
+  "2026-04-15": {rating:86,r2:0.422}, "2026-04-16": {rating:86,r2:0.446},
+  "2026-04-17": {rating:91,r2:0.456}, "2026-04-20": {rating:89,r2:0.469},
+  "2026-04-21": {rating:87,r2:0.459}, "2026-04-22": {rating:92,r2:0.459},
+  "2026-04-23": {rating:91,r2:0.452}, "2026-04-24": {rating:90,r2:0.442},
+  "2026-04-27": {rating:88,r2:0.425}, "2026-04-28": {rating:89,r2:0.406},
+  "2026-04-29": {rating:87,r2:0.390}, "2026-04-30": {rating:87,r2:0.361},
+  "2026-05-01": {rating:91,r2:0.341}, "2026-05-04": {rating:96,r2:0.336},
+  "2026-05-05": {rating:96,r2:0.323}, "2026-05-06": {rating:96,r2:0.315},
+  "2026-05-07": {rating:97,r2:0.295}, "2026-05-08": {rating:96,r2:0.278},
+  "2026-05-11": {rating:96,r2:0.276}, "2026-05-12": {rating:96,r2:0.267},
+};
+
+// Draw chart
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+const dpr = window.devicePixelRatio || 1;
+canvas.width = canvas.offsetWidth * dpr;
+canvas.height = 400 * dpr;
+ctx.scale(dpr, dpr);
+const W = canvas.offsetWidth;
+const H = 400;
+
+const padL = 60, padR = 60, padT = 30, padB = 50;
+const chartW = W - padL - padR;
+const chartH = H - padT - padB;
+
+const allPrices = [...highs, ...lows];
+const minP = Math.floor(Math.min(...allPrices) / 5) * 5;
+const maxP = Math.ceil(Math.max(...allPrices) / 5) * 5;
+
+function x(i) { return padL + (i / (dates.length - 1)) * chartW; }
+function y(p) { return padT + (1 - (p - minP) / (maxP - minP)) * chartH; }
+
+// Grid
+ctx.strokeStyle = '#222';
+ctx.lineWidth = 0.5;
+for (let p = minP; p <= maxP; p += 10) {
+  ctx.beginPath();
+  ctx.moveTo(padL, y(p));
+  ctx.lineTo(W - padR, y(p));
+  ctx.stroke();
+  ctx.fillStyle = '#666';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('$' + p, padL - 6, y(p) + 4);
+}
+
+// X labels
+ctx.textAlign = 'center';
+const monthLabels = {};
+dates.forEach((d, i) => {
+  const m = d.substring(0, 7);
+  if (!monthLabels[m]) {
+    monthLabels[m] = i;
+    ctx.fillStyle = '#666';
+    ctx.fillText(d.substring(5, 7) + '月', x(i), H - padB + 20);
+  }
+});
+
+// Phase annotations
+const phases = [
+  { start: "2026-01-14", end: "2026-02-05", color: "rgba(255,82,82,0.08)", label: "① 暴跌", labelColor: "#ff5252" },
+  { start: "2026-02-05", end: "2026-02-24", color: "rgba(255,193,7,0.06)", label: "② 底部横盘", labelColor: "#ffc107" },
+  { start: "2026-02-25", end: "2026-03-17", color: "rgba(76,175,80,0.08)", label: "③ 暴力拉升", labelColor: "#4caf50" },
+  { start: "2026-03-24", end: "2026-04-10", color: "rgba(255,82,82,0.06)", label: "④ 二次下跌", labelColor: "#ff5252" },
+  { start: "2026-04-13", end: "2026-04-30", color: "rgba(255,193,7,0.06)", label: "⑤ 宽幅震荡", labelColor: "#ffc107" },
+  { start: "2026-05-01", end: "2026-05-12", color: "rgba(79,195,247,0.08)", label: "⑥ 二次拉升", labelColor: "#4fc3f7" },
+];
+
+phases.forEach(p => {
+  const si = dates.indexOf(p.start);
+  const ei = dates.indexOf(p.end);
+  if (si >= 0 && ei >= 0) {
+    ctx.fillStyle = p.color;
+    ctx.fillRect(x(si), padT, x(ei) - x(si), chartH);
+    ctx.fillStyle = p.labelColor;
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(p.label, (x(si) + x(ei)) / 2, padT + 14);
+  }
+});
+
+// Candlesticks
+const barW = Math.max(2, chartW / dates.length * 0.6);
+for (let i = 0; i < dates.length; i++) {
+  const isUp = closes[i] >= opens[i];
+  const color = isUp ? '#ff5252' : '#4caf50';  // Chinese convention: red=up
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+
+  // Wick
+  ctx.beginPath();
+  ctx.moveTo(x(i), y(highs[i]));
+  ctx.lineTo(x(i), y(lows[i]));
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Body
+  const bodyTop = y(Math.max(opens[i], closes[i]));
+  const bodyBot = y(Math.min(opens[i], closes[i]));
+  const bodyH = Math.max(1, bodyBot - bodyTop);
+  if (isUp) {
+    ctx.fillRect(x(i) - barW/2, bodyTop, barW, bodyH);
+  } else {
+    ctx.fillRect(x(i) - barW/2, bodyTop, barW, bodyH);
+  }
+}
+
+// Key price levels
+const levels = [
+  { price: 50.23, label: "底部 $50.23", color: "#4caf50" },
+  { price: 136.65, label: "高点 $136.65", color: "#ff5252" },
+];
+levels.forEach(l => {
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = l.color;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, y(l.price));
+  ctx.lineTo(W - padR, y(l.price));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = l.color;
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(l.label, W - padR + 4, y(l.price) + 4);
+});
+
+// RS Rating overlay (right axis)
+ctx.fillStyle = '#4fc3f7';
+ctx.font = '11px monospace';
+ctx.textAlign = 'left';
+for (let r = 80; r <= 99; r += 5) {
+  const ry = padT + (1 - (r - 75) / 30) * chartH;
+  ctx.fillText('RS ' + r, W - padR + 4, ry + 4);
+  ctx.strokeStyle = '#1a2a3a';
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([2, 4]);
+  ctx.beginPath();
+  ctx.moveTo(padL, ry);
+  ctx.lineTo(W - padR, ry);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// RS line
+ctx.beginPath();
+ctx.strokeStyle = '#4fc3f7';
+ctx.lineWidth = 2;
+let started = false;
+dates.forEach((d, i) => {
+  if (rsData[d]) {
+    const ry = padT + (1 - (rsData[d].rating - 75) / 30) * chartH;
+    if (!started) { ctx.moveTo(x(i), ry); started = true; }
+    else ctx.lineTo(x(i), ry);
+  }
+});
+ctx.stroke();
+
+// RS 95 threshold line
+const rs95y = padT + (1 - (95 - 75) / 30) * chartH;
+ctx.setLineDash([6, 3]);
+ctx.strokeStyle = '#ff9800';
+ctx.lineWidth = 1.5;
+ctx.beginPath();
+ctx.moveTo(padL, rs95y);
+ctx.lineTo(W - padR, rs95y);
+ctx.stroke();
+ctx.setLineDash([]);
+ctx.fillStyle = '#ff9800';
+ctx.textAlign = 'right';
+ctx.fillText('RS 95 阈值', padL - 6, rs95y - 6);
+
+// Breakout marker
+const breakDate = "2026-05-04";
+const bi = dates.indexOf(breakDate);
+if (bi >= 0) {
+  ctx.fillStyle = '#ff9800';
+  ctx.beginPath();
+  ctx.arc(x(bi), y(closes[bi]) - 15, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('!', x(bi), y(closes[bi]) - 11.5);
+  ctx.fillStyle = '#ff9800';
+  ctx.font = '11px sans-serif';
+  ctx.fillText('RS突破95', x(bi), y(closes[bi]) - 26);
+}
+
+// Analysis content
+document.getElementById('analysis').innerHTML = `
+<h2>走势拆解</h2>
+
+<div class="phase">
+  <span class="phase-tag phase-red">① 暴跌</span>
+  <div>1/14 ~ 2/5：从 <span class="highlight">$84.8</span> 一路跌到 <span class="highlight">$50.23</span>，跌幅 <span class="highlight">-41%</span>，16 个交易日。持续放量下跌。</div>
+</div>
+
+<div class="phase">
+  <span class="phase-tag phase-yellow">② 底部横盘</span>
+  <div>2/5 ~ 2/24：在 $56~$63 区间横盘约 14 天，成交量萎缩，市场对利空消化中。</div>
+</div>
+
+<div class="phase">
+  <span class="phase-tag phase-green">③ 暴力拉升</span>
+  <div>2/25 ~ 3/17：从 <span class="highlight">$61</span> 暴力拉到 <span class="highlight">$136</span>，涨幅 <span class="highlight">+123%</span>！2/25 单日跳空 +35%（$61→$83），成交量从 800 万暴增到 6400 万。后续连续突破 $100、$120。</div>
+</div>
+
+<div class="phase">
+  <span class="phase-tag phase-red">④ 二次下跌</span>
+  <div>3/24 ~ 4/10：从 $127 跌到 $85，跌幅 -33%。3/24 单日暴跌 -20%（$127→$101），后续继续走弱。</div>
+</div>
+
+<div class="phase">
+  <span class="phase-tag phase-yellow">⑤ 宽幅震荡</span>
+  <div>4/13 ~ 4/30：在 $85~$108 之间宽幅震荡，日波动极大（单日振幅经常 10%+），未能重回前高。</div>
+</div>
+
+<div class="phase">
+  <span class="phase-tag phase-blue">⑥ 二次拉升</span>
+  <div>5/1 ~ 5/12：从 <span class="highlight">$91</span> 再次暴力拉升到 <span class="highlight">$140</span>（盘中高点），5/4 单日 +20%，5/11 再次 +16%，成交量再次放到 5000 万。</div>
+</div>
+
+<h2>R² 为什么这么低 (0.27)</h2>
+
+<p>站在 5/12 往前数 63 个交易日，回溯窗口大约是 <span class="highlight">2/19 ~ 5/12</span>，这段时间的走势是：</p>
+
+<p style="padding:10px;background:#1a1a1a;border-radius:4px;font-family:monospace;margin:8px 0;">
+$61 横盘 → $83 跳空 → $136 冲高 → $85 暴跌 → $108 反弹 → $91 再跌 → $140 再冲
+</p>
+
+<p>这是一个 <span class="highlight">巨幅震荡、两上两下</span> 的走势。线性回归只能画一条直线，但实际走势是"W 形 + 脉冲"——线性回归根本拟合不了这种非线性波动，所以 R² 只有 0.27。</p>
+
+<h2>RS Rating 为什么还能到 96</h2>
+
+<p>因为 <span class="highlight">涨幅确实巨大</span>：63 天前收盘价约 $57，今天 $124，涨幅 +117%。</p>
+<p>即使 R² 只有 0.27，score = 117% × (0.5 + 0.5 × 0.27) = <span class="highlight">74 分</span>，在 2000 只股票里仍然排在前 4%。</p>
+
+<div class="conclusion">
+  <h2 style="margin-top:0">结论：这是什么类型的股票</h2>
+  <p><strong>高波动率动量股</strong> —— 涨得猛、跌得也猛、振幅巨大。</p>
+  <p>这类股票的特点是：</p>
+  <ul style="margin: 8px 0 0 20px;">
+    <li><strong>涨幅足够大</strong>，所以 rating 高</li>
+    <li><strong>走势极不线性</strong>（暴涨暴跌交替），所以 R² 低</li>
+    <li>不是"稳健趋势股"，而是"事件/情绪驱动的投机股"</li>
+  </ul>
+  <p style="margin-top:12px;">如果你用 R² > 0.5 过滤，<strong>会把 CRCL 这类高波动股全部过滤掉</strong>。该不该过滤取决于你的交易风格——做趋势跟踪就过滤掉，做动量博弈就保留。</p>
+</div>
+`;
+</script>
+</body>
+</html>

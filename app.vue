@@ -5,11 +5,12 @@
       <div class="nav-links">
         <NuxtLink to="/" class="nav-link">🔄 数据采集</NuxtLink>
         <NuxtLink to="/rs" class="nav-link">📊 RS 排名</NuxtLink>
-        <NuxtLink to="/admin" class="nav-link">🛠️ 数据管理</NuxtLink>
+        <NuxtLink to="/rs-pool" class="nav-link">🔥 强势池</NuxtLink>
+        <NuxtLink to="/settings" class="nav-link">⚙️ Settings</NuxtLink>
       </div>
     </nav>
     <main class="main-content">
-      <NuxtPage />
+      <NuxtPage :keepalive="{ include: ['RsRanking', 'RsPool'] }" />
     </main>
   </div>
 </template>

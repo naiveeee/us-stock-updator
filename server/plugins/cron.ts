@@ -1,7 +1,7 @@
 /**
  * Cron 定时任务插件
  *
- * 每个工作日美东 17:00（收盘后 1 小时）自动执行：
+ * 每个工作日美东 0:00（北京中午12:00，Polygon数据已就绪）自动执行：
  *   1. 采集前一个工作日的日线数据（Grouped Daily）
  *      注意：Polygon Free/Basic 计划不允许在当天收盘前请求当天数据，
  *      因此改为采集"前一个工作日"确保数据已就绪。
@@ -10,7 +10,7 @@
  * 控制逻辑：
  * - 每分钟检查一次是否到了触发时间
  * - 已执行过的日期跳过（幂等）
- * - 采集失败后自动延迟 30 分钟重试一次
+ * - 采集失败后每 5 分钟重试一次，最多重试 12 次（覆盖 1 小时）
  * - 支持通过 CRON_DISABLED=true 环境变量关闭
  */
 import { getDb } from "../utils/db";
@@ -20,15 +20,16 @@ import { refreshRsDatesFile } from "../utils/rs-dates-cache";
 import { scheduleStatsRefresh, incrementDbStats } from "../utils/db-stats";
 
 // ── 配置 ──
-const TARGET_HOUR_ET = 17; // 美东 17:00（收盘后 1 小时）
+const TARGET_HOUR_ET = 0; // 美东 0:00（北京时间中午12点，数据已就绪）
 const TARGET_MINUTE_ET = 0;
 const CHECK_INTERVAL = 60_000; // 每分钟检查一次
-const RETRY_DELAY = 30 * 60_000; // 失败后 30 分钟重试
+const RETRY_DELAY = 5 * 60_000; // 失败后 5 分钟重试
+const MAX_RETRIES = 12; // 最多重试 12 次（覆盖 1 小时）
 
 // 记录已跑过的日期，避免重复
 const executedDates = new Set<string>();
-// 记录已重试过的日期，每天最多重试 1 次
-const retriedDates = new Set<string>();
+// 记录每个日期的重试次数
+const retryCountMap = new Map<string, number>();
 let cronTimer: ReturnType<typeof setInterval> | null = null;
 const processStartTime = Date.now();
 
@@ -202,35 +203,40 @@ async function cronCheck() {
     if (count < 0) {
       console.error("[Cron] ❌ 采集失败");
 
-      // 自动重试：30 分钟后再试一次
-      if (!retriedDates.has(targetDateStr)) {
-        retriedDates.add(targetDateStr);
-        console.log(`[Cron] ⏳ 将在 ${RETRY_DELAY / 60000} 分钟后自动重试...`);
+      // 自动重试：每 5 分钟重试一次，最多 12 次（覆盖 1 小时）
+      const scheduleRetry = (date: string, key: string) => {
+        const current = retryCountMap.get(date) ?? 0;
+        if (current >= MAX_RETRIES) {
+          console.error(`[Cron] \u274c 已达最大重试次数 ${MAX_RETRIES}，放弃采集 ${date}`);
+          return;
+        }
+        retryCountMap.set(date, current + 1);
+        console.log(`[Cron] \u23f3 第 ${current + 1}/${MAX_RETRIES} 次重试，${RETRY_DELAY / 60000} 分钟后执行...`);
         setTimeout(async () => {
-          console.log(`\n[Cron] 🔄 重试采集 ${targetDateStr}...`);
+          console.log(`\n[Cron] \ud83d\udd04 重试采集 ${date}（第 ${current + 1}/${MAX_RETRIES} 次）...`);
           try {
-            // 先清除 error 状态，让 fetchToday 可以重新采集
             const db = getDb();
-            db.prepare("DELETE FROM fetch_progress WHERE date = ? AND status = 'error'").run(targetDateStr);
-
-            const retryCount = await fetchToday(targetDateStr, apiKey);
-            if (retryCount >= 0) {
-              console.log(`[Cron] ✅ 重试成功: ${retryCount} 只股票`);
-              // 重试成功后也算 RS
+            db.prepare("DELETE FROM fetch_progress WHERE date = ? AND status = 'error'").run(date);
+            const rc = await fetchToday(date, key);
+            if (rc >= 0) {
+              console.log(`[Cron] \u2705 重试成功: ${rc} 只股票`);
+              retryCountMap.delete(date);
               try {
-                const rsCount = computeAndSaveRS(db, targetDateStr);
+                const rsCount = computeAndSaveRS(db, date);
                 console.log(`[Cron] RS Rating 计算完成: ${rsCount} 只股票`);
               } catch (e: any) {
                 console.error(`[Cron] RS Rating 计算失败: ${e?.message || e}`);
               }
             } else {
-              console.error(`[Cron] ❌ 重试仍然失败，需要手动处理`);
+              scheduleRetry(date, key);
             }
           } catch (e: any) {
-            console.error(`[Cron] ❌ 重试异常: ${e?.message || e}`);
+            console.error(`[Cron] \u274c 重试异常: ${e?.message || e}`);
+            scheduleRetry(date, key);
           }
         }, RETRY_DELAY);
-      }
+      };
+      scheduleRetry(targetDateStr, apiKey)
       return;
     }
 

@@ -43,11 +43,17 @@
           <option value="volume">按成交量</option>
           <option value="change">按涨跌幅</option>
         </select>
-        <select v-model="volumeTop" @change="fetchData" class="filter-select">
-          <option :value="500">月度池 Top 500</option>
-          <option :value="1000">月度池 Top 1000 (全池)</option>
-          <option :value="50000">不限</option>
-        </select>
+        <div class="topn-group">
+          <span class="topn-label">月度池 Top</span>
+          <input type="number" v-model.number="volumeTop" @change="onTopNChange" class="topn-input" min="1" max="50000" />
+          <span class="topn-presets">
+            <button v-for="n in [200, 500, 1000, 2000]" :key="n"
+              :class="['topn-btn', volumeTop === n && 'active']"
+              @click="volumeTop = n; onTopNChange()">{{ n }}</button>
+            <button :class="['topn-btn', volumeTop >= 50000 && 'active']"
+              @click="volumeTop = 50000; onTopNChange()">不限</button>
+          </span>
+        </div>
         <button v-if="!hasRS" @click="runBackfill" :disabled="backfilling" class="btn btn-primary">
           {{ backfilling ? '回填中...' : '⚡ 回填历史 RS' }}
         </button>
@@ -71,7 +77,7 @@
               <th>Percentile</th>
               <th>Close</th>
               <th>Change%</th>
-              <th>Volume</th>
+              <th>Amt</th>
               <th>Score</th>
             </tr>
           </thead>
@@ -99,7 +105,7 @@
               <td :class="row.change_pct >= 0 ? 'text-green' : 'text-red'">
                 {{ row.change_pct != null ? (row.change_pct >= 0 ? '+' : '') + row.change_pct.toFixed(2) + '%' : '-' }}
               </td>
-              <td>{{ formatVolume(row.volume) }}</td>
+              <td>{{ formatDollarVol(row.vwap, row.close, row.volume) }}</td>
               <td class="text-muted">{{ row.score?.toFixed(1) }}</td>
             </tr>
           </tbody>
@@ -137,6 +143,9 @@
 </template>
 
 <script setup lang="ts">
+defineOptions({ name: "RsRanking" });
+// localStorage 持久化
+const RS_STORAGE_KEY = "rs-ranking-settings";
 const data = ref<any>(null);
 const searchInput = ref("");
 const minRating = ref(0);
@@ -146,6 +155,13 @@ const selectedSector = ref("");
 const page = ref(1);
 const pageInput = ref(1);
 const pageSize = 50;
+
+function onTopNChange() {
+  page.value = 1;
+  pageInput.value = 1;
+  saveRsSettings();
+  fetchData();
+}
 const hasRS = ref(true);
 const backfilling = ref(false);
 const backfillMsg = ref("");
@@ -218,6 +234,14 @@ async function fetchData() {
     if (minRating.value > 0) params.min_rating = minRating.value;
     if (searchInput.value.trim()) params.search = searchInput.value.trim();
     if (selectedSector.value) params.sector = selectedSector.value;
+    // Read custom weights from localStorage
+    const savedWeights = localStorage.getItem("rs-weights");
+    if (savedWeights) {
+      try {
+        const [w1, w2, w3, w4] = JSON.parse(savedWeights);
+        params.w1 = w1; params.w2 = w2; params.w3 = w3; params.w4 = w4;
+      } catch {}
+    }
 
     data.value = await $fetch("/api/rs/ranking", { params });
     hasRS.value = !(data.value.message && data.value.message.includes("No RS data"));
@@ -308,6 +332,16 @@ function rsBadgeClass(rating: number) {
   return "rs-cold";
 }
 
+function formatDollarVol(vwap: number | null, close: number | null, volume: number | null) {
+  if (volume == null) return "-";
+  const price = vwap || close;
+  if (price == null) return "-";
+  const amt = price * volume;
+  if (amt >= 1e9) return "$" + (amt / 1e9).toFixed(1) + "B";
+  if (amt >= 1e6) return "$" + (amt / 1e6).toFixed(0) + "M";
+  if (amt >= 1e3) return "$" + (amt / 1e3).toFixed(0) + "K";
+  return "$" + amt.toFixed(0);
+}
 function formatVolume(v: number | null) {
   if (v == null) return "-";
   if (v >= 1e9) return (v / 1e9).toFixed(1) + "B";
@@ -338,7 +372,33 @@ function goToPage() {
   fetchData();
 }
 
+function saveRsSettings() {
+  try {
+    localStorage.setItem(RS_STORAGE_KEY, JSON.stringify({
+      minRating: minRating.value,
+      sortBy: sortBy.value,
+      volumeTop: volumeTop.value,
+      selectedSector: selectedSector.value,
+    }));
+  } catch {}
+}
+
 onMounted(async () => {
+  // 从 localStorage 恢复设置
+  try {
+    const raw = localStorage.getItem(RS_STORAGE_KEY);
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (s.minRating != null) minRating.value = s.minRating;
+      if (s.sortBy) sortBy.value = s.sortBy;
+      if (s.volumeTop != null) volumeTop.value = s.volumeTop;
+      if (s.selectedSector) selectedSector.value = s.selectedSector;
+    }
+  } catch {}
+
+  // 参数变更自动保存
+  watch([minRating, sortBy, volumeTop, selectedSector], saveRsSettings);
+
   // 获取有 RS 数据的日期列表
   try {
     const res = await $fetch<any>("/api/rs/dates");
@@ -537,5 +597,55 @@ onMounted(async () => {
   padding: 3rem;
   color: #666;
   font-size: 0.9rem;
+}
+
+/* TopN 自定义输入 */
+.topn-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.topn-label {
+  font-size: 13px;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+.topn-input {
+  width: 72px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 13px;
+  text-align: center;
+}
+.topn-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.topn-presets {
+  display: inline-flex;
+  gap: 3px;
+}
+.topn-btn {
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #94a3b8;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.topn-btn:hover {
+  border-color: #3b82f6;
+  color: #e2e8f0;
+}
+.topn-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
 }
 </style>

@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>股票详情</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 0; min-height: 100vh; }
+  
+  /* Tab 导航 */
+  .tab-bar { display: flex; background: #111; border-bottom: 1px solid #222; padding: 0 20px; position: sticky; top: 0; z-index: 100; }
+  .tab-bar a { display: flex; align-items: center; gap: 6px; padding: 12px 20px; font-size: 14px; color: #888; text-decoration: none; border-bottom: 2px solid transparent; transition: all 0.2s; white-space: nowrap; }
+  .tab-bar a:hover { color: #ccc; background: #1a1a1a; }
+  .tab-bar a.active { color: #4fc3f7; border-bottom-color: #4fc3f7; font-weight: 600; }
+  .tab-bar .tab-icon { font-size: 16px; }
+  
+  .content { padding: 20px; max-width: 1400px; margin: 0 auto; }
+  
+  /* Stock header */
+  .stock-header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .stock-header h1 { font-size: 28px; color: #fff; }
+  .stock-header .price { font-size: 24px; font-weight: 600; }
+  .stock-header .change { font-size: 16px; font-weight: 500; }
+  .stock-header .meta { font-size: 13px; color: #666; }
+  .price-up { color: #ff5252; }
+  .price-down { color: #4caf50; }
+
+  /* Quick search */
+  .quick-search { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+  .quick-search input { background: #111; border: 1px solid #333; border-radius: 6px; padding: 8px 14px; color: #fff; font-size: 15px; width: 200px; text-transform: uppercase; }
+  .quick-search input:focus { outline: none; border-color: #4fc3f7; }
+  .quick-search button { background: #4fc3f7; color: #000; border: none; border-radius: 6px; padding: 8px 16px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .quick-search button:hover { background: #81d4fa; }
+  .quick-search .range-btns { display: flex; gap: 6px; margin-left: 16px; }
+  .range-btn { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 6px 12px; color: #aaa; font-size: 12px; cursor: pointer; transition: all 0.2s; }
+  .range-btn:hover, .range-btn.active { background: #222; color: #4fc3f7; border-color: #4fc3f7; }
+
+  /* Chart containers */
+  .chart-section { margin-bottom: 24px; }
+  .chart-section h2 { font-size: 15px; color: #888; margin-bottom: 8px; font-weight: 500; }
+  .chart-box { background: #111; border-radius: 8px; padding: 16px; position: relative; }
+  canvas { width: 100%; display: block; }
+  
+  /* Info cards */
+  .info-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .info-card { background: #111; border-radius: 8px; padding: 14px; }
+  .info-card .label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .info-card .value { font-size: 18px; font-weight: 600; color: #fff; }
+  .info-card .value.green { color: #4caf50; }
+  .info-card .value.red { color: #ff5252; }
+  .info-card .value.yellow { color: #ffc107; }
+  .info-card .value.blue { color: #4fc3f7; }
+
+  .loading-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(10,10,10,0.8); border-radius: 8px; color: #666; font-size: 14px; z-index: 10; }
+  .error-msg { text-align: center; padding: 40px; color: #ff5252; }
+
+  /* Tooltip */
+  .chart-tooltip { position: absolute; background: rgba(0,0,0,0.9); border: 1px solid #333; border-radius: 6px; padding: 10px 14px; font-size: 12px; line-height: 1.6; pointer-events: none; z-index: 50; display: none; color: #ccc; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<div class="tab-bar">
+  <a href="rs-pool.html"><span class="tab-icon">📊</span> RS 强势池</a>
+  <a href="crcl-analysis.html"><span class="tab-icon">📈</span> CRCL 分析</a>
+  <a href="#" class="active"><span class="tab-icon">🔍</span> <span id="tab-ticker">股票详情</span></a>
+</div>
+
+<div class="content">
+
+<div class="quick-search">
+  <input type="text" id="ticker-input" placeholder="输入 Ticker..." onkeydown="if(event.key==='Enter')goTicker()">
+  <button onclick="goTicker()">查看</button>
+  <div class="range-btns">
+    <span class="range-btn" data-months="3" onclick="setRange(3)">3M</span>
+    <span class="range-btn active" data-months="6" onclick="setRange(6)">6M</span>
+    <span class="range-btn" data-months="12" onclick="setRange(12)">1Y</span>
+    <span class="range-btn" data-months="24" onclick="setRange(24)">2Y</span>
+  </div>
+</div>
+
+<div class="stock-header" id="stock-header" style="display:none;">
+  <h1 id="hd-ticker">-</h1>
+  <span class="price" id="hd-price">-</span>
+  <span class="change" id="hd-change">-</span>
+  <span class="meta" id="hd-meta">-</span>
+</div>
+
+<div class="info-row" id="info-row" style="display:none;">
+  <div class="info-card"><div class="label">RS Rating</div><div class="value" id="info-rating">-</div></div>
+  <div class="info-card"><div class="label">3M 涨幅</div><div class="value" id="info-pct3m">-</div></div>
+  <div class="info-card"><div class="label">R²</div><div class="value" id="info-r2">-</div></div>
+  <div class="info-card"><div class="label">综合得分</div><div class="value" id="info-score">-</div></div>
+  <div class="info-card"><div class="label">日成交额</div><div class="value" id="info-turnover">-</div></div>
+  <div class="info-card"><div class="label">数据范围</div><div class="value blue" id="info-range">-</div></div>
+</div>
+
+<div class="chart-section">
+  <h2>K 线走势</h2>
+  <div class="chart-box" id="kline-box">
+    <canvas id="kline-canvas" height="350"></canvas>
+    <div class="chart-tooltip" id="kline-tooltip"></div>
+    <div class="loading-overlay" id="kline-loading" style="display:none;">加载中...</div>
+  </div>
+</div>
+
+<div class="chart-section">
+  <h2>RS Rating 走势</h2>
+  <div class="chart-box" id="rs-box">
+    <canvas id="rs-canvas" height="220"></canvas>
+    <div class="chart-tooltip" id="rs-tooltip"></div>
+    <div class="loading-overlay" id="rs-loading" style="display:none;">加载中...</div>
+  </div>
+</div>
+
+</div>
+
+<script>
+const API_BASE = location.origin;
+let dailyData = [];
+let rsData = [];
+let currentTicker = '';
+let rangeMonths = 6;
+
+// ----- Init from URL -----
+function init() {
+  const params = new URLSearchParams(location.search);
+  const ticker = (params.get('ticker') || '').toUpperCase().trim();
+  if (ticker) {
+    document.getElementById('ticker-input').value = ticker;
+    loadTicker(ticker);
+  }
+}
+
+function goTicker() {
+  const ticker = document.getElementById('ticker-input').value.toUpperCase().trim();
+  if (!ticker) return;
+  // Update URL without reload
+  history.replaceState(null, '', `?ticker=${ticker}`);
+  loadTicker(ticker);
+}
+
+function setRange(months) {
+  rangeMonths = months;
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.months) === months));
+  if (currentTicker) loadTicker(currentTicker);
+}
+
+async function loadTicker(ticker) {
+  currentTicker = ticker;
+  document.getElementById('tab-ticker').textContent = ticker;
+  document.title = `${ticker} - 股票详情`;
+  
+  const klineLoading = document.getElementById('kline-loading');
+  const rsLoading = document.getElementById('rs-loading');
+  klineLoading.style.display = 'flex';
+  rsLoading.style.display = 'flex';
+  
+  const from = new Date();
+  from.setMonth(from.getMonth() - rangeMonths);
+  const fromStr = from.toISOString().slice(0, 10);
+
+  try {
+    const [dailyResp, rsResp] = await Promise.all([
+      fetch(`${API_BASE}/api/stocks/daily?ticker=${ticker}&from=${fromStr}&limit=5000`),
+      fetch(`${API_BASE}/api/rs/history?ticker=${ticker}&from=${fromStr}&limit=5000`)
+    ]);
+
+    if (!dailyResp.ok) throw new Error(`Daily API: HTTP ${dailyResp.status}`);
+    if (!rsResp.ok) throw new Error(`RS API: HTTP ${rsResp.status}`);
+    
+    const dailyJson = await dailyResp.json();
+    const rsJson = await rsResp.json();
+    
+    dailyData = (dailyJson.results || dailyJson.data || dailyJson).sort((a, b) => a.date.localeCompare(b.date));
+    rsData = (rsJson.results || rsJson.data || rsJson).sort((a, b) => a.date.localeCompare(b.date));
+
+    if (dailyData.length === 0) throw new Error('无日线数据');
+
+    updateHeader(ticker);
+    updateInfoCards();
+    drawKline();
+    drawRS();
+
+    document.getElementById('stock-header').style.display = 'flex';
+    document.getElementById('info-row').style.display = 'grid';
+  } catch (err) {
+    document.getElementById('stock-header').style.display = 'flex';
+    document.getElementById('hd-ticker').textContent = ticker;
+    document.getElementById('hd-price').textContent = '';
+    document.getElementById('hd-change').textContent = err.message;
+    document.getElementById('hd-change').className = 'change price-down';
+  } finally {
+    klineLoading.style.display = 'none';
+    rsLoading.style.display = 'none';
+  }
+}
+
+// ----- Header & Info -----
+function updateHeader(ticker) {
+  const last = dailyData[dailyData.length - 1];
+  const prev = dailyData.length >= 2 ? dailyData[dailyData.length - 2] : null;
+  
+  document.getElementById('hd-ticker').textContent = ticker;
+  document.getElementById('hd-price').textContent = `$${last.close.toFixed(2)}`;
+  
+  if (prev) {
+    const chg = last.close - prev.close;
+    const chgPct = (chg / prev.close * 100);
+    const cls = chg >= 0 ? 'price-up' : 'price-down';
+    document.getElementById('hd-change').textContent = `${chg >= 0 ? '+' : ''}${chg.toFixed(2)} (${chg >= 0 ? '+' : ''}${chgPct.toFixed(2)}%)`;
+    document.getElementById('hd-change').className = `change ${cls}`;
+    document.getElementById('hd-price').className = `price ${cls}`;
+  }
+  
+  document.getElementById('hd-meta').textContent = `最新: ${last.date}`;
+}
+
+function updateInfoCards() {
+  const lastRs = rsData.length > 0 ? rsData[rsData.length - 1] : null;
+  const last = dailyData[dailyData.length - 1];
+  
+  if (lastRs) {
+    const rating = lastRs.rating;
+    const ratingEl = document.getElementById('info-rating');
+    ratingEl.textContent = rating;
+    ratingEl.className = `value ${rating >= 95 ? 'green' : rating >= 85 ? 'yellow' : 'red'}`;
+    
+    const pct = lastRs.pct_3m;
+    const pctEl = document.getElementById('info-pct3m');
+    pctEl.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+    pctEl.className = `value ${pct >= 0 ? 'red' : 'green'}`;
+    
+    document.getElementById('info-r2').textContent = lastRs.r2.toFixed(3);
+    document.getElementById('info-score').textContent = lastRs.score.toFixed(1);
+  }
+
+  // Turnover
+  const vol = last.volume || 0;
+  const vwap = last.vwap || last.close || 0;
+  const turnover = vol * vwap;
+  const tvEl = document.getElementById('info-turnover');
+  tvEl.textContent = turnover >= 1e9 ? `$${(turnover / 1e9).toFixed(1)}B` 
+                   : turnover >= 1e6 ? `$${(turnover / 1e6).toFixed(1)}M` 
+                   : `$${turnover.toFixed(0)}`;
+
+  document.getElementById('info-range').textContent = `${dailyData[0].date} ~ ${last.date}`;
+}
+
+// ----- K-line Chart -----
+function drawKline() {
+  const canvas = document.getElementById('kline-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const W = rect.width - 32;
+  const H = 350;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  
+  const data = dailyData;
+  const n = data.length;
+  if (n === 0) return;
+  
+  const pad = { top: 20, right: 60, bottom: 30, left: 10 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
+  
+  const allHigh = Math.max(...data.map(d => d.high));
+  const allLow = Math.min(...data.map(d => d.low));
+  const priceRange = allHigh - allLow || 1;
+  const yMax = allHigh + priceRange * 0.05;
+  const yMin = allLow - priceRange * 0.05;
+  
+  const barW = Math.max(1, (cw / n) * 0.7);
+  const gap = cw / n;
+  
+  function x(i) { return pad.left + i * gap + gap / 2; }
+  function y(v) { return pad.top + (1 - (v - yMin) / (yMax - yMin)) * ch; }
+  
+  // Background
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+  
+  // Grid lines
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 1;
+  const gridCount = 5;
+  for (let i = 0; i <= gridCount; i++) {
+    const gy = pad.top + (ch / gridCount) * i;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, gy);
+    ctx.lineTo(W - pad.right, gy);
+    ctx.stroke();
+    
+    // Price label
+    const price = yMax - (yMax - yMin) * (i / gridCount);
+    ctx.fillStyle = '#555';
+    ctx.font = '11px -apple-system, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('$' + price.toFixed(2), W - pad.right + 4, gy + 4);
+  }
+  
+  // Date labels
+  ctx.fillStyle = '#555';
+  ctx.font = '10px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  const labelStep = Math.max(1, Math.floor(n / 8));
+  for (let i = 0; i < n; i += labelStep) {
+    ctx.fillText(data[i].date.slice(5), x(i), H - 6);
+  }
+  
+  // MA lines
+  function calcMA(period) {
+    const ma = [];
+    for (let i = 0; i < n; i++) {
+      if (i < period - 1) { ma.push(null); continue; }
+      let sum = 0;
+      for (let j = i - period + 1; j <= i; j++) sum += data[j].close;
+      ma.push(sum / period);
+    }
+    return ma;
+  }
+  
+  function drawMA(maData, color) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < n; i++) {
+      if (maData[i] === null) continue;
+      const px = x(i), py = y(maData[i]);
+      if (!started) { ctx.moveTo(px, py); started = true; }
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  }
+  
+  const ma20 = calcMA(20);
+  const ma50 = calcMA(50);
+  drawMA(ma20, 'rgba(255,193,7,0.6)');
+  drawMA(ma50, 'rgba(79,195,247,0.5)');
+  
+  // Candlesticks
+  for (let i = 0; i < n; i++) {
+    const d = data[i];
+    const isUp = d.close >= d.open;
+    const color = isUp ? '#ff5252' : '#4caf50';
+    
+    const cx = x(i);
+    const bodyTop = y(Math.max(d.open, d.close));
+    const bodyBot = y(Math.min(d.open, d.close));
+    const bodyH = Math.max(1, bodyBot - bodyTop);
+    
+    // Wick
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, y(d.high));
+    ctx.lineTo(cx, y(d.low));
+    ctx.stroke();
+    
+    // Body
+    ctx.fillStyle = isUp ? color : color;
+    if (barW >= 3) {
+      if (isUp) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx - barW / 2, bodyTop, barW, bodyH);
+      } else {
+        ctx.fillRect(cx - barW / 2, bodyTop, barW, bodyH);
+      }
+    } else {
+      ctx.fillRect(cx - barW / 2, bodyTop, barW, bodyH);
+    }
+  }
+  
+  // MA legend
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.fillStyle = 'rgba(255,193,7,0.8)';
+  ctx.textAlign = 'left';
+  ctx.fillText(`MA20: ${ma20[n-1] ? '$' + ma20[n-1].toFixed(2) : '-'}`, pad.left + 4, pad.top - 4);
+  ctx.fillStyle = 'rgba(79,195,247,0.7)';
+  ctx.fillText(`MA50: ${ma50[n-1] ? '$' + ma50[n-1].toFixed(2) : '-'}`, pad.left + 130, pad.top - 4);
+  
+  // Hover tooltip
+  setupKlineTooltip(canvas, data, x, y, gap, pad, W, H);
+}
+
+function setupKlineTooltip(canvas, data, xFn, yFn, gap, pad, W, H) {
+  const tooltip = document.getElementById('kline-tooltip');
+  const box = canvas.parentElement;
+  
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const idx = Math.round((mx - pad.left - gap / 2) / gap);
+    if (idx < 0 || idx >= data.length) { tooltip.style.display = 'none'; return; }
+    
+    const d = data[idx];
+    const chg = idx > 0 ? d.close - data[idx - 1].close : 0;
+    const chgPct = idx > 0 ? (chg / data[idx - 1].close * 100) : 0;
+    const vol = d.volume || 0;
+    const turnover = vol * (d.vwap || d.close);
+    const tvFmt = turnover >= 1e9 ? `$${(turnover/1e9).toFixed(1)}B` : turnover >= 1e6 ? `$${(turnover/1e6).toFixed(1)}M` : `$${turnover.toFixed(0)}`;
+    
+    tooltip.innerHTML = `
+      <div style="color:#fff;font-weight:600;margin-bottom:4px;">${d.date}</div>
+      <div>开: $${d.open.toFixed(2)}</div>
+      <div>高: $${d.high.toFixed(2)}</div>
+      <div>低: $${d.low.toFixed(2)}</div>
+      <div>收: <span style="color:${d.close >= d.open ? '#ff5252' : '#4caf50'}">$${d.close.toFixed(2)}</span></div>
+      <div>涨跌: <span style="color:${chg >= 0 ? '#ff5252' : '#4caf50'}">${chg >= 0 ? '+' : ''}${chgPct.toFixed(2)}%</span></div>
+      <div>成交额: ${tvFmt}</div>
+    `;
+    tooltip.style.display = 'block';
+    
+    let tx = e.clientX - rect.left + 16;
+    if (tx + 180 > W) tx = e.clientX - rect.left - 180;
+    tooltip.style.left = tx + 'px';
+    tooltip.style.top = (e.clientY - rect.top - 40) + 'px';
+  };
+  
+  canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+}
+
+// ----- RS Chart -----
+function drawRS() {
+  const canvas = document.getElementById('rs-canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const W = rect.width - 32;
+  const H = 220;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  
+  const data = rsData;
+  const n = data.length;
+  if (n === 0) {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#666';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('无 RS 数据', W / 2, H / 2);
+    return;
+  }
+  
+  const pad = { top: 20, right: 40, bottom: 30, left: 10 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
+  
+  const gap = cw / n;
+  function x(i) { return pad.left + i * gap + gap / 2; }
+  function y(v) { return pad.top + (1 - (v - 0) / 100) * ch; }
+  
+  // Background
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, W, H);
+  
+  // Zone fills
+  // ≥85 zone (green tint)
+  ctx.fillStyle = 'rgba(76,175,80,0.05)';
+  ctx.fillRect(pad.left, y(100), cw, y(85) - y(100));
+  // <85 zone (red tint)
+  ctx.fillStyle = 'rgba(255,82,82,0.03)';
+  ctx.fillRect(pad.left, y(85), cw, y(0) - y(85));
+  
+  // Grid lines at key levels
+  [99, 95, 90, 85, 80, 50].forEach(level => {
+    ctx.strokeStyle = level === 85 ? '#333' : '#1a1a1a';
+    ctx.lineWidth = level === 85 ? 1.5 : 1;
+    if (level === 85) ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y(level));
+    ctx.lineTo(W - pad.right, y(level));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    
+    ctx.fillStyle = '#555';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(level.toString(), W - pad.right + 4, y(level) + 3);
+  });
+  
+  // Date labels
+  ctx.fillStyle = '#555';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  const labelStep = Math.max(1, Math.floor(n / 8));
+  for (let i = 0; i < n; i += labelStep) {
+    ctx.fillText(data[i].date.slice(5), x(i), H - 6);
+  }
+  
+  // RS line with gradient color by rating
+  for (let i = 1; i < n; i++) {
+    const r = data[i].rating;
+    const color = r >= 95 ? '#4caf50' : r >= 85 ? '#ffc107' : '#ff5252';
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x(i - 1), y(data[i - 1].rating));
+    ctx.lineTo(x(i), y(r));
+    ctx.stroke();
+  }
+  
+  // Current rating dot
+  const lastR = data[n - 1];
+  const dotColor = lastR.rating >= 95 ? '#4caf50' : lastR.rating >= 85 ? '#ffc107' : '#ff5252';
+  ctx.fillStyle = dotColor;
+  ctx.beginPath();
+  ctx.arc(x(n - 1), y(lastR.rating), 4, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Current rating label
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(lastR.rating.toString(), x(n - 1) + 8, y(lastR.rating) + 4);
+  
+  // Hover tooltip
+  setupRSTooltip(canvas, data, x, y, gap, pad, W, H);
+}
+
+function setupRSTooltip(canvas, data, xFn, yFn, gap, pad, W, H) {
+  const tooltip = document.getElementById('rs-tooltip');
+  
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const idx = Math.round((mx - pad.left - gap / 2) / gap);
+    if (idx < 0 || idx >= data.length) { tooltip.style.display = 'none'; return; }
+    
+    const d = data[idx];
+    tooltip.innerHTML = `
+      <div style="color:#fff;font-weight:600;margin-bottom:4px;">${d.date}</div>
+      <div>RS Rating: <span style="color:${d.rating >= 95 ? '#4caf50' : d.rating >= 85 ? '#ffc107' : '#ff5252'};font-weight:600;">${d.rating}</span></div>
+      <div>3M 涨幅: <span style="color:${d.pct_3m >= 0 ? '#ff5252' : '#4caf50'}">${d.pct_3m >= 0 ? '+' : ''}${d.pct_3m.toFixed(1)}%</span></div>
+      <div>R²: ${d.r2.toFixed(3)}</div>
+      <div>Score: ${d.score.toFixed(1)}</div>
+    `;
+    tooltip.style.display = 'block';
+    
+    let tx = e.clientX - rect.left + 16;
+    if (tx + 160 > W) tx = e.clientX - rect.left - 160;
+    tooltip.style.left = tx + 'px';
+    tooltip.style.top = (e.clientY - rect.top - 30) + 'px';
+  };
+  
+  canvas.onmouseleave = () => { tooltip.style.display = 'none'; };
+}
+
+// Resize handler
+window.addEventListener('resize', () => {
+  if (dailyData.length) drawKline();
+  if (rsData.length) drawRS();
+});
+
+// Init
+init();
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 /**
  * GET /api/rs/ranking
- * RS 排名列表
+ * RS 排名列表（EMA + R² 版）
  *
  * 查询参数：
  *   date         - 交易日 (可选，默认最新)
@@ -10,8 +10,8 @@
  *   limit        - 返回条数 (可选，默认 100，最大 5000)
  *   offset       - 偏移量 (可选，默认 0)
  *   search       - ticker 前缀搜索 (可选)
- *   volume_top   - 按月度池子排名筛选前 N 名 (可选，默认 1000，基于上月日均成交额)
- *   sector       - 板块过滤 (可选，如 "Technology")
+ *   volume_top   - 按月度池子排名筛选前 N 名 (可选，默认 2000)
+ *   sector       - 板块过滤 (可选)
  */
 export default defineEventHandler((event) => {
   const query = getQuery(event);
@@ -30,7 +30,8 @@ export default defineEventHandler((event) => {
   }
 
   const minRating = parseInt(query.min_rating as string) || 0;
-  const volumeTop = parseInt(query.volume_top as string) || 1000;
+  const volumeTop = parseInt(query.volume_top as string) || 2000;
+
   let limit = parseInt(query.limit as string) || 100;
   limit = Math.min(Math.max(1, limit), 5000);
   let offset = parseInt(query.offset as string) || 0;
@@ -46,9 +47,7 @@ export default defineEventHandler((event) => {
   const sortBy = sortFields[query.sort_by as string] || "r.percentile";
   const order = (query.order as string) === "asc" ? "ASC" : "DESC";
 
-  // 构建 SQL：rs_ratings JOIN daily_bars，可选 JOIN ticker_info
-  // 使用月度池子 (rs_pool) 排名进行筛选，与 RS 计算口径一致
-  const month = date.slice(0, 7); // "2026-05"
+  const month = date.slice(0, 7);
   let volumeFilterSql = "";
   const params: any[] = [date, date];
 
@@ -64,10 +63,7 @@ export default defineEventHandler((event) => {
     params.push(month, volumeTop);
   }
 
-  // 是否需要 JOIN ticker_info
   const needTickerInfo = !!sector;
-
-  // 始终 LEFT JOIN ticker_info 以返回 sector 字段；sector 过滤时改为 INNER JOIN
   const tiJoinType = needTickerInfo ? "JOIN" : "LEFT JOIN";
   let joinClause = "JOIN daily_bars d ON r.ticker = d.ticker AND r.date = d.date";
   joinClause += `\n    ${tiJoinType} ticker_info ti ON r.ticker = ti.ticker`;
@@ -97,9 +93,10 @@ export default defineEventHandler((event) => {
   `;
   const totalRow = db.prepare(countSql).get(...params) as { total: number };
 
-  // 数据
+  // 数据：新增 r2 字段
   const dataSql = `
     SELECT r.ticker, r.date, r.score, r.rating, r.percentile,
+           r.pct_3m, r.r2,
            d.close, d.volume, d.open, d.high, d.low, d.vwap,
            CASE WHEN d.open > 0 THEN ROUND((d.close - d.open) / d.open * 100, 2) ELSE NULL END as change_pct,
            ti.sector, ti.sic_description, ti.name as company_name
@@ -121,6 +118,7 @@ export default defineEventHandler((event) => {
     limit,
     volume_top: volumeTop,
     sector: sector || null,
+    algorithm: "ema_r2",
     results: rows,
   };
 });

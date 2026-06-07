@@ -53,7 +53,7 @@
           <span class="tt-item">L <b>{{ tooltipData.low }}</b></span>
           <span class="tt-item">C <b>{{ tooltipData.close }}</b></span>
           <span class="tt-item" :class="tooltipData.changeClass">{{ tooltipData.change }}</span>
-          <span class="tt-item tt-vol">Vol <b>{{ tooltipData.volume }}</b></span>
+          <span class="tt-item tt-vol">Amt <b>{{ tooltipData.volume }}</b></span>
         </div>
       </div>
       <div ref="priceChartEl" class="chart-container"></div>
@@ -78,23 +78,48 @@
 
     <!-- RS 季度明细 -->
     <section class="card" v-if="latestRS">
-      <h2>📋 RS 得分明细</h2>
-      <div class="detail-grid">
-        <div class="detail-item">
-          <span class="detail-label">加权总分</span>
-          <span class="detail-value">{{ latestRS.score?.toFixed(2) }}</span>
+      <h2>📋 RS 得分构成</h2>
+      <div class="score-breakdown">
+        <div class="breakdown-formula">
+          <div class="formula-row">
+            <span class="formula-label">涨幅 (63天)</span>
+            <span class="formula-value" :class="latestRS.pct_3m >= 0 ? 'val-up' : 'val-down'">
+              {{ latestRS.pct_3m >= 0 ? '+' : '' }}{{ latestRS.pct_3m?.toFixed(2) }}%
+            </span>
+          </div>
+          <div class="formula-row">
+            <span class="formula-label">R² 趋势质量 (63天)</span>
+            <span class="formula-value">
+              {{ (latestRS.r2 ?? 0).toFixed(4) }}
+              <span class="r2-bar">
+                <span class="r2-fill" :style="{ width: ((latestRS.r2 ?? 0) * 100) + '%' }" :class="r2Class"></span>
+              </span>
+            </span>
+          </div>
+          <div class="formula-row">
+            <span class="formula-label">R² 系数</span>
+            <span class="formula-value">{{ (0.5 + 0.5 * (latestRS.r2 ?? 0)).toFixed(4) }}</span>
+          </div>
+          <div class="formula-divider"></div>
+          <div class="formula-row formula-result">
+            <span class="formula-label">调整得分</span>
+            <span class="formula-value">{{ latestRS.score?.toFixed(2) }}</span>
+          </div>
+          <div class="formula-row formula-result">
+            <span class="formula-label">RS Rating</span>
+            <span class="formula-value rs-rating-val" :class="rsBigClass">{{ latestRS.rating }} / 99</span>
+          </div>
+          <div class="formula-row">
+            <span class="formula-label">精确百分位</span>
+            <span class="formula-value">{{ latestRS.percentile?.toFixed(2) }}%</span>
+          </div>
+          <div class="formula-row">
+            <span class="formula-label">最新收盘</span>
+            <span class="formula-value">${{ latestRS.close?.toFixed(2) }}</span>
+          </div>
         </div>
-        <div class="detail-item">
-          <span class="detail-label">RS Rating</span>
-          <span class="detail-value">{{ latestRS.rating }} / 99</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">精确百分位</span>
-          <span class="detail-value">{{ latestRS.percentile.toFixed(2) }}%</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">最新收盘</span>
-          <span class="detail-value">${{ latestRS.close?.toFixed(2) }}</span>
+        <div class="formula-explain">
+          <code>得分 = 涨幅 × (0.5 + 0.5 × R²)</code>
         </div>
       </div>
     </section>
@@ -180,10 +205,11 @@ let priceDataMap = new Map<string, any>();
 let rsDataMap = new Map<string, any>();
 
 function formatVol(v: number): string {
-  if (v >= 1e9) return (v / 1e9).toFixed(1) + "B";
-  if (v >= 1e6) return (v / 1e6).toFixed(1) + "M";
-  if (v >= 1e3) return (v / 1e3).toFixed(0) + "K";
-  return String(v);
+  const prefix = "$";
+  if (v >= 1e9) return prefix + (v / 1e9).toFixed(1) + "B";
+  if (v >= 1e6) return prefix + (v / 1e6).toFixed(1) + "M";
+  if (v >= 1e3) return prefix + (v / 1e3).toFixed(0) + "K";
+  return prefix + String(v);
 }
 
 function updateTooltip(dateStr: string) {
@@ -198,7 +224,7 @@ function updateTooltip(dateStr: string) {
     const pct = bar.open > 0 ? ((bar.close - bar.open) / bar.open * 100) : 0;
     tooltipData.change = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
     tooltipData.changeClass = pct >= 0 ? "tt-green" : "tt-red";
-    tooltipData.volume = formatVol(bar.volume);
+    tooltipData.volume = formatVol((bar.vwap || bar.close) * bar.volume);
   } else {
     tooltipData.visible = false;
   }
@@ -222,7 +248,7 @@ function updateTooltip(dateStr: string) {
     rsTooltipData.ratingClass = "";
     rsTooltipData.percentile = "-";
     rsTooltipData.score = "-";
-    rsTooltipData.noDataReason = "RS 需上市满 12 个月数据";
+    rsTooltipData.noDataReason = "暂无 RS（未入选当月计算池）";
   } else {
     rsTooltipData.visible = false;
   }
@@ -431,11 +457,19 @@ function renderRSChart(rsRows: any[], priceBars: any[]) {
     }
   }
 
-  // 灰色背景 area series 标记 gap 区间
-  if (gaps.length > 0) {
+  // 灰色背景：逐日 area series 覆盖无 RS 数据的区间
+  const rsDateSet = new Set(rsRows.map((r: any) => r.date));
+
+  // 为每个价格日期生成 area 数据：无 RS 的日期=100（置灰），有 RS 的=0（透明）
+  const gapAreaData: { time: string; value: number }[] = [];
+  for (const b of priceBars) {
+    gapAreaData.push({ time: b.date, value: rsDateSet.has(b.date) ? 0 : 100 });
+  }
+
+  if (gapAreaData.some(d => d.value > 0)) {
     const gapAreaSeries = rsChart.addAreaSeries({
-      topColor: "rgba(80, 80, 80, 0.2)",
-      bottomColor: "rgba(80, 80, 80, 0.05)",
+      topColor: "rgba(80, 80, 80, 0.25)",
+      bottomColor: "rgba(80, 80, 80, 0.08)",
       lineColor: "transparent",
       lineWidth: 0,
       priceScaleId: "gap-bg",
@@ -449,21 +483,7 @@ function renderRSChart(rsRows: any[], priceBars: any[]) {
       visible: false,
     });
 
-    // 为每个 gap 生成 area 数据点（高值=100 覆盖全图）
-    const gapData: { time: string; value: number }[] = [];
-    for (const gap of gaps) {
-      gapData.push({ time: gap.from, value: 0 });
-      const fromNext = new Date(gap.from);
-      fromNext.setDate(fromNext.getDate() + 1);
-      gapData.push({ time: fromNext.toISOString().slice(0, 10), value: 100 });
-      const toPrev = new Date(gap.to);
-      toPrev.setDate(toPrev.getDate() - 1);
-      if (toPrev > fromNext) {
-        gapData.push({ time: toPrev.toISOString().slice(0, 10), value: 100 });
-      }
-      gapData.push({ time: gap.to, value: 0 });
-    }
-    gapAreaSeries.setData(gapData);
+    gapAreaSeries.setData(gapAreaData);
   }
 
   // RS Rating 线
@@ -473,12 +493,32 @@ function renderRSChart(rsRows: any[], priceBars: any[]) {
     priceFormat: { type: "custom", formatter: (v: number) => v.toFixed(0) },
   });
 
-  rsLineSeries.setData(
-    rsRows.map((r: any) => ({
-      time: r.date,
-      value: r.rating,
-    }))
-  );
+  // Split RS data into segments at gaps (>5 days between points)
+  const rsSegments: any[][] = [[]];
+  for (let i = 0; i < rsRows.length; i++) {
+    if (i > 0) {
+      const prev = new Date(rsRows[i - 1].date).getTime();
+      const curr = new Date(rsRows[i].date).getTime();
+      const daysDiff = (curr - prev) / (1000 * 60 * 60 * 24);
+      if (daysDiff > 5) {
+        rsSegments.push([]);
+      }
+    }
+    rsSegments[rsSegments.length - 1].push({ time: rsRows[i].date, value: rsRows[i].rating });
+  }
+  // First segment uses main series
+  rsLineSeries.setData(rsSegments[0] || []);
+  // Additional segments get their own series to prevent cross-gap lines
+  for (let s = 1; s < rsSegments.length; s++) {
+    const seg = rsChart.addLineSeries({
+      color: "#f5a623",
+      lineWidth: 2,
+      priceFormat: { type: "custom", formatter: (v: number) => v.toFixed(0) },
+      lastValueVisible: s === rsSegments.length - 1,
+      priceLineVisible: false,
+    });
+    seg.setData(rsSegments[s]);
+  }
 
   // 80 线（CAN SLIM 标准线）
   const line80 = rsChart.addLineSeries({
@@ -529,6 +569,14 @@ function setRange(r: string) {
   range.value = r;
   fetchAndRender();
 }
+
+
+const r2Class = computed(() => {
+  const r2 = latestRS.value?.r2 ?? 0;
+  if (r2 >= 0.7) return 'r2-high';
+  if (r2 >= 0.4) return 'r2-mid';
+  return 'r2-low';
+});
 
 const rsBigClass = computed(() => {
   if (!latestRS.value) return "";
@@ -708,5 +756,79 @@ onUnmounted(() => {
   font-size: 1.1rem;
   font-weight: 600;
   color: #fff;
+}
+
+.score-breakdown {
+  padding: 0.2rem 0;
+}
+.breakdown-formula {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.formula-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.03);
+}
+.formula-label {
+  font-size: 0.82rem;
+  color: #999;
+}
+.formula-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.val-up { color: #26a69a; }
+.val-down { color: #ef5350; }
+.r2-bar {
+  display: inline-block;
+  width: 60px;
+  height: 6px;
+  background: #333;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.r2-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+.r2-high { background: #26a69a; }
+.r2-mid { background: #ffc107; }
+.r2-low { background: #ef5350; }
+.formula-divider {
+  border-top: 1px dashed #444;
+  margin: 0.2rem 0;
+}
+.formula-result {
+  background: rgba(255,255,255,0.06);
+}
+.formula-result .formula-label {
+  color: #ccc;
+  font-weight: 500;
+}
+.rs-rating-val {
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+.formula-explain {
+  margin-top: 0.8rem;
+  text-align: center;
+}
+.formula-explain code {
+  font-size: 0.75rem;
+  color: #666;
+  background: rgba(255,255,255,0.05);
+  padding: 0.3rem 0.8rem;
+  border-radius: 4px;
 }
 </style>

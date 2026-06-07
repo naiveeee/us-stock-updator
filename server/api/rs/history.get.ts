@@ -30,7 +30,7 @@ export default defineEventHandler((event) => {
 
   const rows = db
     .prepare(
-      `SELECT r.ticker, r.date, r.score, r.rating, r.percentile,
+      `SELECT r.ticker, r.date, r.score, r.rating, r.percentile, r.pct_3m, r.r2,
               d.close, d.volume, d.open, d.high, d.low
        FROM rs_ratings r
        LEFT JOIN daily_bars d ON r.ticker = d.ticker AND r.date = d.date
